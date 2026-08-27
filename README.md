@@ -371,6 +371,10 @@ Running it alongside a real language server is the intended arrangement wherever
 
 Two details are worth knowing because they are decisions rather than defaults. Completions are identifier-shaped only: the measurements score punctuation because a fair benchmark has to, but a popup offering `;` is noise, and aggregate top-1 is mostly punctuation for every engine including this one. And every item carries a `sortText`, because an editor that re-sorts alphabetically throws away the only thing this server contributes.
 
+It follows the tree, not just the buffer you have open. A save updates that one file, and where the editor supports file watching the server registers for it, so a branch switch, a rebase, a codegen step or a second editor also reach the index — none of which the editor would otherwise tell it about. The client does the watching because it already is: a second recursive watcher from every language server is how a machine runs out of file handles. A client that cannot watch keeps the save-time updates and is told so in the log.
+
+A watched change is reconciled against the disk rather than trusted. The event says what the editor thinks happened; the disk says what did, and the disk is what the index claims to describe — so a stale `Deleted` for a file that is still there leaves it indexed. And a batch large enough that folding it in one file at a time would cost more than rebuilding is rebuilt instead, against the build time this corpus actually measured at startup rather than a guess. A branch switch touching hundreds of files should not stall completions for seconds.
+
 It reports the recital rate to the editor's log as each document opens, with the band it falls in. That number decides whether any of this is worth having, and a server that quietly served weak completions without ever saying so would be the one place in this project where it was hidden.
 
 ## Exit codes
