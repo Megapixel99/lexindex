@@ -136,8 +136,13 @@ function mcnemar(aHits, bHits) {
 // report three underpowered nulls instead of one answer.
 {
   const dir = dirs.join(" + ");
-  let files = [];
-  for (const d of dirs) files.push(...collectFiles(d, collectOpts));
+  // One call for every directory, so a file reachable through two of them is held out
+  // once and trained on once. Overlapping paths would otherwise put the same file on both
+  // sides of the split, which is not a benchmark, it is an answer key -- and they inflate
+  // the recital rate, which is the number this harness exists to report honestly.
+  const collected = collectFiles(dirs, collectOpts);
+  const duplicates = collected.duplicates;
+  const files = [...collected];
   if (files.length < 4) {
     console.error(
       `GATE: ${dir} has ${files.length} indexable files; need at least 4 to hold any out.` +
@@ -325,6 +330,13 @@ function mcnemar(aHits, bHits) {
   }
 
   say(`\n=== ${dir}${langSpec ? `   [--lang ${langSpec}]` : ""}`);
+  if (duplicates > 0) {
+    report.duplicates = duplicates;
+    say(
+      `NOTE: ${duplicates} file${duplicates === 1 ? "" : "s"} were reachable through more than one ` +
+        `of those paths, and were counted once. Overlapping paths inflate every number below.`
+    );
+  }
   say(
     `index: ${train.length} files, ${model.nTokens.toLocaleString()} tokens, ${indexMs} ms` +
       `   held out: ${heldUsed}/${held.length} files`
