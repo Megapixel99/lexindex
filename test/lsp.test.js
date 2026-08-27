@@ -43,6 +43,7 @@ function client(args = []) {
   let buf = Buffer.alloc(0);
   let nextId = 1;
 
+  const serverRequests = [];
   proc.stderr.on("data", (d) => stderr.push(String(d)));
   proc.stdout.on("data", (chunk) => {
     buf = Buffer.concat([buf, chunk]);
@@ -55,6 +56,13 @@ function client(args = []) {
       if (buf.length < he + 4 + len) return;
       const msg = JSON.parse(buf.subarray(he + 4, he + 4 + len).toString("utf8"));
       buf = buf.subarray(he + 4 + len);
+      if (msg.method !== undefined && msg.id !== undefined) {
+        // A request FROM the server. Record it and answer, because a server waiting on a
+        // reply it never gets is the same hang in the other direction.
+        serverRequests.push(msg);
+        write({ id: msg.id, result: null });
+        continue;
+      }
       if (msg.id !== undefined && waiters.has(msg.id)) {
         waiters.get(msg.id)(msg);
         waiters.delete(msg.id);
@@ -71,6 +79,7 @@ function client(args = []) {
   const api = {
     proc,
     stderr,
+    serverRequests,
     notify: (method, params) => write({ method, params }),
     /**
      * Send a request and wait for its reply — but never forever. A request an editor
@@ -132,12 +141,14 @@ before(() => {
 after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
 /** initialize + initialized + didOpen, which is every editor's opening move. */
-async function started(args = [], initializationOptions = undefined, text = SOURCE) {
+const WATCHING_CLIENT = { workspace: { didChangeWatchedFiles: { dynamicRegistration: true } } };
+
+async function started(args = [], initializationOptions = undefined, text = SOURCE, capabilities = {}) {
   const c = client(args);
   const init = await c.request("initialize", {
     processId: process.pid,
     rootUri: pathToFileURL(dir).href,
-    capabilities: {},
+    capabilities,
     initializationOptions,
   });
   c.notify("initialized", {});
@@ -340,5 +351,147 @@ describe("the language server", () => {
     } finally {
       fs.rmSync(empty, { recursive: true, force: true });
     }
+  });
+
+  // A save is not the only way a tree changes: a branch switch, a rebase or a codegen
+  // step rewrite files the editor never had open.
+  describe("watching the tree, not just the open buffer", () => {
+    test("it registers a watcher when the client says it can watch", async () => {
+      const { c } = await started([], undefined, SOURCE, WATCHING_CLIENT);
+      await c.request("textDocument/completion", { textDocument: { uri }, position: { line: 1, character: 6 } });
+
+      const reg = c.serverRequests.find((r) => r.method === "client/registerCapability");
+      assert.ok(reg, "no watcher was registered");
+      const watcher = reg.params.registrations[0];
+      assert.equal(watcher.method, "workspace/didChangeWatchedFiles");
+      const glob = watcher.registerOptions.watchers[0].globPattern;
+      assert.match(glob, /\bjs\b/, `the glob must cover the indexed suffixes: ${glob}`);
+      assert.match(glob, /\bts\b/);
+    });
+
+    test("it asks for nothing from a client that cannot watch, and says so", async () => {
+      const { c } = await started();
+      await c.request("textDocument/completion", { textDocument: { uri }, position: { line: 1, character: 6 } });
+      assert.ok(
+        !c.serverRequests.some((r) => r.method === "client/registerCapability"),
+        "registering with a client that declared no support would hang or error"
+      );
+      assert.match(c.stderr.join(""), /follow saves only/);
+    });
+
+    test("a file changed outside the editor reaches the index", async () => {
+      const { c } = await started([], undefined, SOURCE, WATCHING_CLIENT);
+      const outside = path.join(dir, "outside.js");
+      try {
+        fs.writeFileSync(outside, "export const writtenByGitCheckout = 1;\nwrittenByGitCheckout;\n");
+        c.notify("workspace/didChangeWatchedFiles", {
+          changes: [{ uri: pathToFileURL(outside).href, type: 1 }],
+        });
+        const r = await c.request("textDocument/completion", {
+          textDocument: { uri },
+          position: { line: 1, character: 6 },
+        });
+        assert.ok(
+          r.result.items.some((i) => i.label === "writtenByGitCheckout"),
+          `got ${JSON.stringify(r.result.items.map((i) => i.label))}`
+        );
+      } finally {
+        fs.rmSync(outside, { force: true });
+      }
+    });
+
+    test("a deleted file stops being suggested", async () => {
+      const { c } = await started([], undefined, SOURCE, WATCHING_CLIENT);
+      const doomed = path.join(dir, "doomed.js");
+      fs.writeFileSync(doomed, "export const soonToVanish = 1;\nsoonToVanish;\n");
+      c.notify("workspace/didChangeWatchedFiles", { changes: [{ uri: pathToFileURL(doomed).href, type: 1 }] });
+      const before = await c.request("textDocument/completion", { textDocument: { uri }, position: { line: 1, character: 6 } });
+      assert.ok(before.result.items.some((i) => i.label === "soonToVanish"));
+
+      fs.rmSync(doomed, { force: true });
+      c.notify("workspace/didChangeWatchedFiles", { changes: [{ uri: pathToFileURL(doomed).href, type: 3 }] });
+      const after = await c.request("textDocument/completion", { textDocument: { uri }, position: { line: 1, character: 6 } });
+      assert.ok(
+        !after.result.items.some((i) => i.label === "soonToVanish"),
+        "a deleted file must leave the index, or it goes on describing a tree that is gone"
+      );
+    });
+
+    // The event says what the editor thinks happened; the disk says what did. When they
+    // disagree the disk wins, because the disk is what the index claims to describe.
+    test("a delete event for a file that still exists does not evict it", async () => {
+      const { c } = await started([], undefined, SOURCE, WATCHING_CLIENT);
+      const survivor = path.join(dir, "survivor.js");
+      try {
+        fs.writeFileSync(survivor, "export const stillOnDisk = 1;\nstillOnDisk;\n");
+        c.notify("workspace/didChangeWatchedFiles", { changes: [{ uri: pathToFileURL(survivor).href, type: 1 }] });
+        // A stale Deleted event for a file that is very much still there.
+        c.notify("workspace/didChangeWatchedFiles", { changes: [{ uri: pathToFileURL(survivor).href, type: 3 }] });
+
+        const r = await c.request("textDocument/completion", {
+          textDocument: { uri },
+          position: { line: 1, character: 6 },
+        });
+        assert.ok(
+          r.result.items.some((i) => i.label === "stillOnDisk"),
+          "the file is on disk, so it belongs in the index whatever the event claimed"
+        );
+      } finally {
+        fs.rmSync(survivor, { force: true });
+      }
+    });
+
+    test("changes it would never have indexed are ignored", async () => {
+      const { c } = await started([], undefined, SOURCE, WATCHING_CLIENT);
+      const nested = path.join(dir, "node_modules", "dep");
+      fs.mkdirSync(nested, { recursive: true });
+      const depFile = path.join(nested, "index.js");
+      try {
+        fs.writeFileSync(depFile, "export const somebodyElsesIdiom = 1;\nsomebodyElsesIdiom;\n");
+        c.notify("workspace/didChangeWatchedFiles", {
+          changes: [
+            { uri: pathToFileURL(depFile).href, type: 1 },
+            { uri: pathToFileURL(path.join(dir, "notes.md")).href, type: 1 },
+          ],
+        });
+        const r = await c.request("textDocument/completion", { textDocument: { uri }, position: { line: 1, character: 6 } });
+        assert.ok(
+          !r.result.items.some((i) => i.label === "somebodyElsesIdiom"),
+          "node_modules is excluded on purpose; a watcher must not smuggle it back in"
+        );
+      } finally {
+        fs.rmSync(path.join(dir, "node_modules"), { recursive: true, force: true });
+      }
+    });
+
+    test("a large batch is rebuilt rather than folded in one file at a time", async () => {
+      const { c } = await started([], undefined, SOURCE, WATCHING_CLIENT);
+      const made = [];
+      try {
+        // Enough files that per-file updates would cost more than the build did.
+        for (let i = 0; i < 400; i++) {
+          const f = path.join(dir, `bulk${i}.js`);
+          fs.writeFileSync(f, `export const bulkSymbol${i} = ${i};\n`);
+          made.push(f);
+        }
+        c.notify("workspace/didChangeWatchedFiles", {
+          changes: made.map((f) => ({ uri: pathToFileURL(f).href, type: 1 })),
+        });
+        const r = await c.request("textDocument/completion", { textDocument: { uri }, position: { line: 1, character: 6 } });
+        assert.ok(r.result, "the server must still answer after a bulk change");
+        assert.match(c.stderr.join(""), /the cheaper route/, "a large batch should have taken the rebuild path");
+      } finally {
+        for (const f of made) fs.rmSync(f, { force: true });
+      }
+    });
+
+    test("a watched change before the index exists is not a crash", async () => {
+      const c = client([]);
+      c.notify("workspace/didChangeWatchedFiles", {
+        changes: [{ uri: pathToFileURL(path.join(dir, "widget.js")).href, type: 2 }],
+      });
+      const init = await c.request("initialize", { rootUri: pathToFileURL(dir).href, capabilities: WATCHING_CLIENT });
+      answered(init, "initialize after an early notification");
+    });
   });
 });

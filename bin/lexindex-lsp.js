@@ -62,6 +62,9 @@ let built = null;
 let completer = null;
 let roots = [];
 let shuttingDown = false;
+let clientCaps = {};
+let indexable = null; // {extensions, skipDirs, suffixes} once the language is settled
+let nextServerId = 1;
 
 /** Everything the server says about itself goes to stderr; stdout is the protocol. */
 const log = (msg) => process.stderr.write(`[lexindex-lsp] ${msg}\n`);
@@ -73,6 +76,8 @@ function send(message) {
   process.stdout.write(body);
 }
 const reply = (id, result) => send({ jsonrpc: "2.0", id, result });
+/** The one request this server makes of the client: please watch these files. */
+const requestOfClient = (method, params) => send({ jsonrpc: "2.0", id: nextServerId++, method, params });
 const replyError = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });
 
 let buffer = Buffer.alloc(0);
@@ -138,14 +143,15 @@ function offsetAt(text, position) {
 
 function buildTheIndex() {
   const options = {};
-  if (langSpec) {
-    try {
-      const resolved = resolveLanguages(langSpec);
-      options.extensions = resolved.extensions;
-      options.skipDirs = resolved.skipDirs;
-    } catch (e) {
-      log(e.message);
-    }
+  try {
+    indexable = resolveLanguages(langSpec || "javascript");
+    options.extensions = indexable.extensions;
+    options.skipDirs = indexable.skipDirs;
+  } catch (e) {
+    log(e.message);
+    indexable = resolveLanguages("javascript");
+    options.extensions = indexable.extensions;
+    options.skipDirs = indexable.skipDirs;
   }
   // retainFileTokens is what lets a save update one file instead of rebuilding the tree.
   options.retainFileTokens = true;
@@ -197,6 +203,7 @@ function handle(msg) {
 
   switch (method) {
     case "initialize": {
+      clientCaps = (params && params.capabilities) || {};
       roots = [];
       if (params && Array.isArray(params.workspaceFolders)) {
         for (const f of params.workspaceFolders) {
@@ -237,6 +244,7 @@ function handle(msg) {
       // Build after the handshake rather than during it, so a large tree delays
       // completions rather than the editor's startup.
       buildTheIndex();
+      watchTheTree();
       return;
 
     case "shutdown":
@@ -277,6 +285,14 @@ function handle(msg) {
       } catch (e) {
         log(`could not update ${file}: ${e.message}`);
       }
+      return;
+    }
+
+    case "workspace/didChangeWatchedFiles": {
+      // A save is not the only way a tree changes. A branch switch, a rebase, a codegen
+      // step or a second editor all rewrite files this server never saw opened, and
+      // without this the index quietly describes the tree as it was at startup.
+      applyWatchedChanges((params && params.changes) || []);
       return;
     }
 
@@ -325,6 +341,95 @@ function handle(msg) {
       // Notifications are ignored; requests must be answered or the editor waits forever.
       if (id !== undefined) replyError(id, -32601, `unhandled method: ${method}`);
   }
+}
+
+/**
+ * Ask the client to watch the files this index is built from.
+ *
+ * The client does the watching because it already is: editors watch the workspace for
+ * their own reasons, and a second recursive watcher from every language server is how a
+ * machine runs out of file handles. This needs `dynamicRegistration`, and a client
+ * without it simply keeps the save-time updates.
+ */
+function watchTheTree() {
+  const supported =
+    clientCaps.workspace &&
+    clientCaps.workspace.didChangeWatchedFiles &&
+    clientCaps.workspace.didChangeWatchedFiles.dynamicRegistration;
+  if (!supported || !indexable) {
+    if (!supported) log("client does not watch files; the index will follow saves only");
+    return;
+  }
+  requestOfClient("client/registerCapability", {
+    registrations: [
+      {
+        id: "lexindex-watch",
+        method: "workspace/didChangeWatchedFiles",
+        registerOptions: {
+          watchers: [{ globPattern: `**/*.{${indexable.suffixes.join(",")}}` }],
+        },
+      },
+    ],
+  });
+}
+
+/** Is this path one the index would have collected in the first place? */
+function isIndexable(file) {
+  if (!indexable || !indexable.extensions.test(file)) return false;
+  // The glob filters by suffix but knows nothing about node_modules, and an editor will
+  // happily report every dependency file a package install just wrote.
+  for (const part of file.split(path.sep)) {
+    if (indexable.skipDirs.has(part)) return false;
+  }
+  return true;
+}
+
+/**
+ * Apply a batch of file-system changes, by whichever route is actually cheaper.
+ *
+ * One changed file costs about 4 ms to fold in; rebuilding costs whatever this corpus
+ * measured at startup, which is recorded rather than guessed. A branch switch touching
+ * hundreds of files is faster to rebuild than to fold in one at a time, and doing it the
+ * slow way would stall completions for seconds.
+ */
+const MS_PER_FILE_UPDATE = 4;
+function applyWatchedChanges(changes) {
+  if (!built || !built.tokensByFile) return;
+  const relevant = [];
+  for (const change of changes) {
+    const file = uriToPath(change.uri);
+    if (file && isIndexable(file)) relevant.push(file);
+  }
+  if (!relevant.length) return;
+
+  if (relevant.length * MS_PER_FILE_UPDATE > built.ms) {
+    const started = Date.now();
+    buildTheIndex();
+    log(`${relevant.length} files changed — rebuilt in ${Date.now() - started} ms, which was the cheaper route`);
+    return;
+  }
+
+  const started = Date.now();
+  const counts = { added: 0, updated: 0, removed: 0, unchanged: 0 };
+  for (const file of relevant) {
+    try {
+      // The change's `type` is deliberately not read. Every file is reconciled against
+      // the disk instead, because the disk is what the index is supposed to describe and
+      // the event is only a hint that it moved. A file that is gone fails to read and
+      // `updateIndexFile` already treats that as a deletion; a Deleted event for a file
+      // that is still there — a delete and recreate arriving late, which editors do
+      // batch — leaves it indexed, which is the right answer and the one trusting the
+      // event would get wrong.
+      const result = updateIndexFile(built, file);
+      counts[result.action]++;
+    } catch (e) {
+      log(`could not update ${file}: ${e.message}`);
+    }
+  }
+  log(
+    `watched changes: ${counts.added} added, ${counts.updated} updated, ` +
+      `${counts.removed} removed in ${Date.now() - started} ms`
+  );
 }
 
 // A malformed message from an editor must not take the server down mid-session; it is

@@ -48,22 +48,38 @@ export const COMMON_SKIP_DIRS = [
   "__pycache__",
 ];
 
-export const LANGUAGES = {
-  javascript: { extensions: /\.(js|mjs|cjs|jsx|ts|tsx|mts|cts)$/, skip: [] },
-  python: { extensions: /\.(py|pyi|pyw)$/, skip: [".eggs", "__pypackages__"] },
-  go: { extensions: /\.go$/, skip: [] },
-  rust: { extensions: /\.rs$/, skip: ["target"] },
-  java: { extensions: /\.java$/, skip: ["target", ".gradle", "out"] },
-  kotlin: { extensions: /\.(kt|kts)$/, skip: ["target", ".gradle", "out"] },
-  ruby: { extensions: /\.(rb|rake)$/, skip: [".bundle"] },
-  c: { extensions: /\.(c|h)$/, skip: [] },
-  cpp: { extensions: /\.(cc|cpp|cxx|c\+\+|hh|hpp|hxx|h)$/, skip: [] },
-  csharp: { extensions: /\.cs$/, skip: ["bin", "obj", "Library", "Temp"] },
-  php: { extensions: /\.php$/, skip: [] },
-  swift: { extensions: /\.swift$/, skip: [".build", "DerivedData"] },
-  shell: { extensions: /\.(sh|bash|zsh)$/, skip: [] },
-  sql: { extensions: /\.sql$/, skip: [] },
+/**
+ * Suffixes are the source of truth and the pattern is derived from them, because two
+ * consumers want two different shapes: `collectFiles` wants a regular expression, and a
+ * file watcher wants a glob. Writing both by hand is how they drift.
+ */
+const DEFINITIONS = {
+  javascript: { suffixes: ["js", "mjs", "cjs", "jsx", "ts", "tsx", "mts", "cts"], skip: [] },
+  python: { suffixes: ["py", "pyi", "pyw"], skip: [".eggs", "__pypackages__"] },
+  go: { suffixes: ["go"], skip: [] },
+  rust: { suffixes: ["rs"], skip: ["target"] },
+  java: { suffixes: ["java"], skip: ["target", ".gradle", "out"] },
+  kotlin: { suffixes: ["kt", "kts"], skip: ["target", ".gradle", "out"] },
+  ruby: { suffixes: ["rb", "rake"], skip: [".bundle"] },
+  c: { suffixes: ["c", "h"], skip: [] },
+  cpp: { suffixes: ["cc", "cpp", "cxx", "c++", "hh", "hpp", "hxx", "h"], skip: [] },
+  csharp: { suffixes: ["cs"], skip: ["bin", "obj", "Library", "Temp"] },
+  php: { suffixes: ["php"], skip: [] },
+  swift: { suffixes: ["swift"], skip: [".build", "DerivedData"] },
+  shell: { suffixes: ["sh", "bash", "zsh"], skip: [] },
+  sql: { suffixes: ["sql"], skip: [] },
 };
+
+/** A suffix list to the anchored pattern `collectFiles` matches filenames against. */
+export function patternFor(suffixes) {
+  const escaped = suffixes.map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`\\.(?:${escaped.join("|")})$`);
+}
+
+export const LANGUAGES = {};
+for (const [name, def] of Object.entries(DEFINITIONS)) {
+  LANGUAGES[name] = { extensions: patternFor(def.suffixes), suffixes: def.suffixes, skip: def.skip };
+}
 
 /** Spellings a person is likely to type, mapped to the canonical name. */
 const ALIASES = {
@@ -119,17 +135,12 @@ export function resolveLanguages(spec) {
   }
   if (!wanted.length) throw new Error("--lang needs at least one language");
 
-  const parts = [];
+  const suffixes = [];
   const skipDirs = new Set(COMMON_SKIP_DIRS);
   for (const name of wanted) {
-    const { extensions, skip } = LANGUAGES[name];
-    // Strip the anchors off each preset so they can be joined into one alternation.
-    parts.push(extensions.source.replace(/^\\\./, "").replace(/\$$/, ""));
+    const { suffixes: own, skip } = LANGUAGES[name];
+    for (const x of own) if (!suffixes.includes(x)) suffixes.push(x);
     for (const d of skip) skipDirs.add(d);
   }
-  return {
-    extensions: new RegExp(`\\.(?:${parts.join("|")})$`),
-    skipDirs,
-    languages: wanted,
-  };
+  return { extensions: patternFor(suffixes), suffixes, skipDirs, languages: wanted };
 }
