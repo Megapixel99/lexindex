@@ -8,7 +8,8 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "lexindex": "./bin/lexindex.js"
+    "lexindex": "./bin/lexindex.js",
+    "lexindex-lsp": "./bin/lexindex-lsp.js"
   },
   "files": [
     "src",
@@ -40,7 +41,11 @@
     "editor",
     "codemirror",
     "monaco",
-    "zero-dependency"
+    "zero-dependency",
+    "lsp",
+    "language-server",
+    "neovim",
+    "helix"
   ],
   "license": "MIT",
   "repository": {
