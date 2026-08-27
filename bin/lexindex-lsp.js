@@ -25,12 +25,17 @@
  */
 
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { buildIndex, updateIndexFile } from "../src/build.js";
 import { Completer } from "../src/completer.js";
 import { isWord, lex } from "../src/lex.js";
 import { recitalBand } from "../src/count-model.js";
 import { resolveLanguages } from "../src/languages.js";
+
+// Read rather than repeated: a version written down twice is a version that disagrees
+// with itself at the next release, and this one already would have.
+const VERSION = createRequire(import.meta.url)("../package.json").version;
 
 // ---- argv ------------------------------------------------------------------
 const argv = process.argv.slice(2);
@@ -235,7 +240,7 @@ function handle(msg) {
           textDocumentSync: { openClose: true, change: 1, save: { includeText: false } },
           completionProvider: { resolveProvider: false },
         },
-        serverInfo: { name: "lexindex", version: "0.1.1" },
+        serverInfo: { name: "lexindex", version: VERSION },
       });
       return;
     }
