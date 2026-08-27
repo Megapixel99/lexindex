@@ -23,6 +23,26 @@
 
 import { isWord } from "./lex.js";
 
+/**
+ * What a recital rate means, in one line, for the two baselines it means different
+ * things against.
+ *
+ * These are two thresholds and not one, and collapsing them into a single "below 40%,
+ * expect little" understated the tool: against an editor's word list the advantage holds
+ * from about 35% up and the only measured null is at 13.5%, while against ten lines of
+ * frequency counting on real identifiers it takes about 60% and is null at 46.5%, 45.3%
+ * and 37.9%. Citing the second set of nulls for the first claim answers a different
+ * question than the one asked. The README's table is the long form of this function.
+ *
+ * It lives here, beside `recitalRate`, so the CLI and the measurement harness cannot
+ * drift apart about what the number they both print actually means.
+ */
+export function recitalBand(rate) {
+  if (rate >= 0.6) return "above ~60%: beats your editor's word list and a ten-line frequency table";
+  if (rate >= 0.35) return "35-60%: beats your editor's word list, though not a ten-line frequency table";
+  return "below ~35%: expect little — the one corpus measured down here, at 13.5%, was null";
+}
+
 const SEP = " ";
 const TOP_UNIGRAM_CANDIDATES = 200;
 

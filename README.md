@@ -139,7 +139,7 @@ Read what that is before reading the number. **It is not the tsserver table abov
 
 Two exclusions carry weight and are printed rather than buried. A list holding one candidate makes every possible ordering correct whenever that candidate is the answer, so those positions are dropped; leaving them in inflates every row equally and flattens the comparison along with them. And re-ranking returns a permutation, so it can never invent an answer that was not offered — positions where the truth is missing from the list are reported as coverage instead of being scored, because supplying the candidate is the language server's job and not this one's.
 
-The run above is a null, on a corpus chosen for being small. That is the harness working. Below roughly 40% recital this tool is expected to be null against an ordinary word list, and a harness that could not say so would not be worth shipping — which is also why it refuses outright rather than printing a number when too few positions survive the exclusions.
+The run above is a null, on a corpus chosen for being small. That is the harness working. The table at the top of this README says plainly that there are recital ranges where this tool is expected to lose to one baseline or the other, and a harness that could not report that would not be worth shipping — which is also why it refuses outright rather than printing a number when too few positions survive the exclusions.
 
 ## What it cannot do
 
@@ -203,6 +203,7 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 | `index.replaceFileTokens(old, next)` | swap one file's counts and re-finalize |
 | `index.removeFileTokens(tokens)`, `.reopen()` | the lower-level path |
 | `index.recitalRate(tokens)` | the number from the table at the top |
+| `recitalBand(rate)` | what that number means, in one line; the CLI and the harness both print this one |
 | `lex(text)`, `isWord(t)`, `splitAtCursor(text)` | the tokenizer |
 
 The scores are comparable to each other within one call and are nothing more than that. They are not calibrated probabilities and they do not mean the same thing at two different cursors, so read them to draw a bar or to merge this ranking with another engine's — not as a confidence to cut on. Gating on confidence is the first row of the table above, and it lost three separate times.

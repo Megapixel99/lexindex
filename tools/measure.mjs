@@ -34,7 +34,7 @@
 
 import fs from "node:fs";
 import { lex, isWord } from "../src/lex.js";
-import { CountModel } from "../src/count-model.js";
+import { CountModel, recitalBand } from "../src/count-model.js";
 import { Completer } from "../src/completer.js";
 import { collectFiles } from "../src/build.js";
 
@@ -299,10 +299,8 @@ function mcnemar(aHits, bHits) {
     `index: ${train.length} files, ${model.nTokens.toLocaleString()} tokens, ${indexMs} ms` +
       `   held out: ${heldUsed}/${held.length} files`
   );
-  say(
-    `RECITAL: ${pct(recSeen, recTotal)}% of held-out 4-token contexts were already in the index` +
-      `${recSeen / Math.max(recTotal, 1) < 0.4 ? "   ← below ~40%; expect little" : ""}`
-  );
+  say(`RECITAL: ${pct(recSeen, recTotal)}% of held-out 4-token contexts were already in the index`);
+  say(`         ${recitalBand(rate(recSeen, recTotal) || 0)}`);
   say(`\n  ${"arm".padEnd(52)} top-1    top-5    ident+1char`);
   for (const n of names) {
     const a = acc[n];
