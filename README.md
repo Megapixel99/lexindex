@@ -160,6 +160,8 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 | `completer.completeScored(...)`, `.suggestScored(...)` | the same rankings, each with the score that produced it |
 | `completer.rerank(candidates, textBeforeCursor)` | reorders another engine's list; returns a permutation, so nothing is added and nothing is dropped |
 | `completer.scoreCandidates(prev, candidates)` | `Map<candidate, score>`, the blend over a supplied set |
+| `completer.session()` | a `BufferSession`: the same calls, re-lexing only what you typed |
+| `session.complete(...)`, `.completeScored(...)`, `.rerank(...)` | drop-in replacements that keep the buffer between keystrokes |
 | `completer.setBuffer(tokens)` and `.suggest(prev, { k, prefix })` | the lower-level path |
 | `updateIndexFile(built, file, text?)` | re-index one file in place; omit `text` to read from disk, pass `null` if it was deleted |
 | `index.replaceFileTokens(old, next)` | swap one file's counts and re-finalize |
@@ -170,6 +172,8 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 The scores are comparable to each other within one call and are nothing more than that. They are not calibrated probabilities and they do not mean the same thing at two different cursors, so read them to draw a bar or to merge this ranking with another engine's — not as a confidence to cut on. Gating on confidence is the first row of the table above, and it lost three separate times.
 
 `setBuffer` is incremental: extending the previous buffer reuses the cache instead of rebuilding it, which is what keeps the per-keystroke cost flat. On a 369-file, 560K-token index, building takes 1.07 s and a suggestion takes 0.36 ms at the median (p99 3.30 ms).
+
+That 0.36 ms is `suggest(prev, ...)`, which is handed the tokens. `complete(text)` and `rerank(list, text)` are handed the text instead and lex all of it again on every call, so what they cost is the buffer rather than the edit — see below.
 
 ## Keeping the index current while you edit
 
@@ -191,6 +195,30 @@ updateIndexFile(built, "src/gone.js", null);             // deleted
 The result is not an approximation of a rebuilt index. It is exactly equal to one, which the suite asserts over edits, deletions, additions and long sequences of edits by comparing the whole count table against a rebuild. On a corpus of 400 files and 422,598 tokens, one file's update took 4.13 ms at the median against 585 ms to rebuild.
 
 That exactness is worth more than the speed. A count left behind at zero would be invisible in a suggestion list and perfectly visible in `recitalRate`, which reads the context tables directly — the index would go on claiming it had seen text that had been deleted, and the recital rate is the one number this project asks anybody to trust.
+
+## One keystroke should cost one keystroke
+
+`complete(text)` and `rerank(list, text)` take the whole text above the cursor, which is the shape an editor reaches for and the reason both of them re-lex the entire buffer on every call. Measured against the 400-file, 422,598-token index above, with a 175 KB file open, that is what the ergonomic path was paying:
+
+| per keystroke, 175 KB buffer | `Completer` | `completer.session()` |
+|---|---|---|
+| `complete(text)` | 3.26 ms | **1.14 ms** |
+| `rerank(list, text)` | 2.28 ms | **0.43 ms** |
+
+A session keeps the tokens and the buffer cache between calls and re-lexes only from the last settled point in the text. The calls take the same arguments and return the same things, so it is a swap and nothing else:
+
+```js
+const session = completer.session();
+
+session.complete(textBeforeCursor);            // was completer.complete(...)
+session.rerank(candidates, textBeforeCursor);  // was completer.rerank(...)
+```
+
+It is the same answer, not a faster approximation of one. The suite types real text in one character at a time and asserts the session's list is identical to a freshly built `Completer`'s at every cursor, at every blend, through backspacing and cursor jumps, and on the shapes that break a careless incremental lexer — `12` growing into `123` is one token and not two, and `12ab` is one run of word characters holding two tokens. Across the checks written while building it, 17,784 comparisons produced no disagreement.
+
+What makes that safe is a property of the lexer rather than bookkeeping. A token is an identifier, a number, or one non-word character, so no token can span a non-word character; any position whose preceding character is a non-word character therefore has everything before it settled, whatever gets typed next. The session re-lexes from the latest such position and reuses the rest. An edit that is not an extension — a backspace, a jump — is rebuilt from scratch, which costs exactly what the plain `Completer` costs today.
+
+Suggestions are also selected rather than sorted now. Ranking 5 candidates out of the roughly 1,700 a live buffer offers had been ordering the 1,695 nobody would see. Because candidates are map keys, no two share a token, so score-then-token is a total order and taking the best k is byte-identical to sorting and slicing — which the suite checks against the full ordering rather than assuming.
 
 ## The CLI
 

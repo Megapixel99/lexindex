@@ -23,10 +23,35 @@
  */
 
 import { CacheModel } from "./cache-model.js";
+import { BufferSession } from "./session.js";
 import { splitAtCursor } from "./lex.js";
 
 /** Cap on how many repo candidates get re-weighted, so a huge context stays fast. */
 const PRUNE = 500;
+
+/**
+ * The best `k` by `cmp`, without sorting the rest.
+ *
+ * Ranking five suggestions out of the ~1,700 candidates a live buffer produces spent most
+ * of its time ordering the 1,695 nobody was going to see. The comparator is a total order
+ * here — candidates are Map keys, so no two entries share a token, and score-then-token
+ * separates every pair — which is what makes selecting the top k give byte-identical
+ * output to sorting and slicing, rather than merely equivalent output.
+ */
+function topK(items, k, cmp) {
+  if (k >= items.length) return items.sort(cmp);
+  const best = [];
+  for (const it of items) {
+    if (best.length === k && cmp(it, best[k - 1]) >= 0) continue;
+    let i = best.length < k ? best.length : k - 1;
+    while (i > 0 && cmp(it, best[i - 1]) < 0) {
+      best[i] = best[i - 1];
+      i--;
+    }
+    best[i] = it;
+  }
+  return best;
+}
 
 export class Completer {
   /**
@@ -127,8 +152,8 @@ export class Completer {
     const scored = items.map(([w, p]) => [beta * (cacheP.get(w) || 0) + (1 - beta) * p, w]);
     // Ties break on the token, deterministically, so the same input always gives the same
     // list — a completion UI that reorders on redraw is worse than a wrong one.
-    scored.sort((x, y) => y[0] - x[0] || (x[1] < y[1] ? 1 : x[1] > y[1] ? -1 : 0));
-    return scored.slice(0, k).map(([score, token]) => ({ token, score }));
+    const best = topK(scored, k, (x, y) => y[0] - x[0] || (x[1] < y[1] ? 1 : x[1] > y[1] ? -1 : 0));
+    return best.map(([score, token]) => ({ token, score }));
   }
 
   /**
@@ -139,6 +164,20 @@ export class Completer {
     const { prev, prefix } = splitAtCursor(textBeforeCursor);
     this.setBuffer(prev);
     return this.suggest(prev, { k, prefix });
+  }
+
+  /**
+   * A cursor that keeps its buffer between keystrokes.
+   *
+   * `complete` and `rerank` take the whole text above the cursor and so re-lex all of it
+   * every call, which costs the file rather than the edit. A session takes the same
+   * arguments, returns the same answers, and re-lexes only what changed. If you are
+   * calling this per keystroke in an editor, call it on a session.
+   *
+   * @returns {BufferSession}
+   */
+  session() {
+    return new BufferSession(this);
   }
 
   /** `complete`, returning `{token, score}` entries. See `suggestScored` on the scores. */
