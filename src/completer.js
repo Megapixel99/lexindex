@@ -241,6 +241,23 @@ export class Completer {
     if (names.length < 2) return names;
     const { prev } = splitAtCursor(textBeforeCursor);
     this.setBuffer(prev);
+    return this.rerankTokens(names, prev);
+  }
+
+  /**
+   * `rerank` for a caller that already holds the tokens — a language server that lexed
+   * the buffer once, or the measurement harness.
+   *
+   * This is the whole of `rerank` after the lexing, so anything measured through here is
+   * measuring the shipped path rather than a copy of it that might drift from it.
+   *
+   * @param {Iterable<string>} candidates names from the other engine
+   * @param {string[]} prev the completed tokens before the cursor
+   * @returns {string[]} the same names, reordered
+   */
+  rerankTokens(candidates, prev) {
+    const names = [...candidates];
+    if (names.length < 2) return names;
     const scores = this.scoreCandidates(prev, names);
     // Ties break exactly as `suggest` breaks them, so the two orderings never disagree
     // about the same candidates. The direction looks odd on its own and is inherited

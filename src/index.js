@@ -11,7 +11,7 @@
  * type-aware, and where a language server runs the language server is better.
  */
 export { lex, isWord, splitAtCursor, trailingWordStart } from "./lex.js";
-export { CountModel } from "./count-model.js";
+export { CountModel, recitalBand } from "./count-model.js";
 export { CacheModel } from "./cache-model.js";
 export { Completer } from "./completer.js";
 export { BufferSession } from "./session.js";

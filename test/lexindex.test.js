@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { lex, isWord, splitAtCursor } from "../src/lex.js";
-import { CountModel } from "../src/count-model.js";
+import { CountModel, recitalBand } from "../src/count-model.js";
 import { CacheModel } from "../src/cache-model.js";
 import { Completer } from "../src/completer.js";
 
@@ -76,6 +76,40 @@ describe("CountModel", () => {
     const m = indexOf(src);
     assert.equal(m.recitalRate(lex(src)), 1);
     assert.ok(m.recitalRate(lex("zzz qqq www vvv uuu ttt")) < 0.5);
+  });
+});
+
+// These thresholds were wrong once, in the direction that undersold the tool: one band
+// at 40% stood in for two different questions, and a corpus at 35.9% recital that beat
+// its baseline decisively (z=3.74) was being told to expect little. They are pinned here
+// so the CLI and the harness cannot quietly drift back to a single number.
+describe("recitalBand", () => {
+  test("above 60% both baselines are beaten", () => {
+    for (const r of [0.6, 0.73, 1]) {
+      assert.match(recitalBand(r), /word list and a ten-line frequency table/);
+    }
+  });
+
+  test("35% to 60% beats the word list but not the frequency table", () => {
+    for (const r of [0.35, 0.359, 0.465, 0.5999]) {
+      const band = recitalBand(r);
+      assert.match(band, /beats your editor's word list/);
+      assert.match(band, /though not a ten-line frequency table/);
+    }
+  });
+
+  test("below 35% promises nothing, and says what was actually measured there", () => {
+    for (const r of [0, 0.135, 0.349]) {
+      assert.match(recitalBand(r), /expect little/);
+      assert.match(recitalBand(r), /13\.5%/);
+    }
+  });
+
+  test("the two thresholds are distinct — one band cannot answer both questions", () => {
+    assert.notEqual(recitalBand(0.45), recitalBand(0.65));
+    assert.notEqual(recitalBand(0.45), recitalBand(0.20));
+    // The old single threshold sat at 40%; 35.9% and 45% must now read the same.
+    assert.equal(recitalBand(0.359), recitalBand(0.45));
   });
 });
 
@@ -343,6 +377,34 @@ describe("rerank — re-ordering another engine's candidate list", () => {
     const c1 = new Completer(m).rerank(given, "a b ");
     const c2 = new Completer(m).rerank(given, "a b ");
     assert.deepEqual(c1, c2);
+  });
+
+  // rerankTokens is the whole of rerank after the lexing. The measurement harness calls
+  // it directly, so if the two could disagree the harness would be measuring something
+  // other than what ships.
+  test("rerankTokens is exactly rerank without the lexing step", () => {
+    const m = indexOf("const alpha = 1; ".repeat(8) + "const zeta = 2; alpha(zeta);");
+    for (const text of ["const ", "alpha(", "const alpha = 1; z", "", "a b c "]) {
+      const given = ["zeta", "alpha", "neverSeenHere", "const"];
+
+      const viaText = new Completer(m).rerank(given.slice(), text);
+
+      const c = new Completer(m);
+      const { prev } = splitAtCursor(text);
+      c.setBuffer(prev);
+      const viaTokens = c.rerankTokens(given.slice(), prev);
+
+      assert.deepEqual(viaTokens, viaText, `disagreed at ${JSON.stringify(text)}`);
+    }
+  });
+
+  test("rerankTokens returns a permutation and leaves one or none alone", () => {
+    const m = indexOf("const alpha = 1;");
+    const c = new Completer(m);
+    const given = ["b", "a", "c"];
+    assert.deepEqual([...c.rerankTokens(given, ["const"])].sort(), [...given].sort());
+    assert.deepEqual(c.rerankTokens(["only"], ["const"]), ["only"]);
+    assert.deepEqual(c.rerankTokens([], ["const"]), []);
   });
 
   // Consistency with suggest(): re-ranking suggest's own top-k must not reorder it.

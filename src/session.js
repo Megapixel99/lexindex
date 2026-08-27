@@ -146,9 +146,6 @@ export class BufferSession {
     const names = [...candidates];
     if (names.length < 2) return names;
     this.update(textBeforeCursor);
-    const scores = this.completer.scoreCandidates(this.tokens, names);
-    return names.sort(
-      (a, b) => scores.get(b) - scores.get(a) || (a < b ? 1 : a > b ? -1 : 0)
-    );
+    return this.completer.rerankTokens(names, this.tokens);
   }
 }

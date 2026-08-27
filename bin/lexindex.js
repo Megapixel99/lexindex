@@ -15,6 +15,7 @@ import fs from "node:fs";
 import { buildIndex } from "../src/build.js";
 import { Completer } from "../src/completer.js";
 import { lex } from "../src/lex.js";
+import { recitalBand as band } from "../src/count-model.js";
 
 const argv = process.argv.slice(2);
 const dirs = [];
@@ -238,12 +239,7 @@ function offsetOfLineCol(src, line, col) {
   return Math.min(o + col - 1, o + lines[line - 1].length);
 }
 
-/** The band from the README's table — the honest predictor, not a decoration. */
-function band(rate) {
-  if (rate >= 0.6) return "above ~60%; the full claim holds";
-  if (rate >= 0.4) return "40-60%; beats a word list, a frequency table gets you most of the way";
-  return "below ~40%; expect little";
-}
+
 
 // The recital rate is reported with every suggestion because it is the honest predictor
 // of whether these suggestions are worth anything on this repo.

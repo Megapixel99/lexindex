@@ -19,16 +19,22 @@
  * Measured across eight corpora it ran 72.9% down to 13.5%, and at 13.5% the advantage
  * over an ordinary word list was NULL.
  *
+ * It also measures the RE-RANKING use, which is the README's strongest claim and used to
+ * be the one thing shipped here could not check on your own repo. See the section below
+ * for what candidate list it uses and why that list rather than a language server's.
+ *
  * GATES. The harness refuses rather than reporting a number it cannot support: too few
  * files, zero scored positions, or a scorer that never produced both a hit and a miss.
  * A clean result from an instrument that could not fail is worthless — this project's
  * sibling tool reported "0 findings over 8,595 files" while silently discarding all of
  * them, and only a positive control caught it.
+ *
+ *     --json    the same measurements as one JSON object, for automation
  */
 
 import fs from "node:fs";
 import { lex, isWord } from "../src/lex.js";
-import { CountModel } from "../src/count-model.js";
+import { CountModel, recitalBand } from "../src/count-model.js";
 import { Completer } from "../src/completer.js";
 import { collectFiles } from "../src/build.js";
 
@@ -37,11 +43,18 @@ const PER_FILE = Number(process.env.PERFILE || 25); // an uncapped harness once 
 const SEED = Number(process.env.SEED || 0);         // cases from six files. Cap it.
 const K = 5;
 
-const dirs = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const asJson = argv.includes("--json");
+const dirs = argv.filter((a) => a !== "--json");
 if (!dirs.length) {
-  console.error("usage: measure.mjs <dir>...");
+  console.error("usage: measure.mjs [--json] <dir>...");
   process.exit(2);
 }
+/** Everything printed, also collected so --json can emit it without a second pass. */
+const report = { corpus: dirs.join(" + ") };
+const say = (line) => {
+  if (!asJson) console.log(line);
+};
 
 function mulberry32(a) {
   return function () {
@@ -128,6 +141,8 @@ function mcnemar(aHits, bHits) {
     "baseline: repo identifiers by frequency (ctags-like)",
   ];
 
+  const hybrid = arms["HYBRID           (beta=0.5)"];
+
   const identHits = {};
   for (const n of names) identHits[n] = [];
   const acc = {};
@@ -140,6 +155,38 @@ function mcnemar(aHits, bHits) {
   let sawHit = false;
   let sawMiss = false;
   let heldUsed = 0;
+
+  // ---- the re-ranking use --------------------------------------------------
+  //
+  // The README's strongest claim is that reordering somebody else's candidate list beats
+  // the order they shipped it in, and until now nothing here could check that on your own
+  // repo. It does not need a language server to check: the list an ordinary editor offers
+  // is the words already in your buffer, which is a REAL candidate list rather than a
+  // synthetic one, and it is the same baseline the rest of this harness measures against.
+  // What is measured is exactly the shipped `rerankTokens`, not a copy of its arithmetic.
+  //
+  // Two exclusions, both load-bearing, both reported rather than buried:
+  //   - a list of one candidate makes every possible ordering correct whenever it is the
+  //     truth, so those positions are dropped; leaving them in would inflate every row
+  //     equally and the comparison with it
+  //   - re-ranking returns a permutation, so it cannot invent an answer that was never
+  //     offered; positions where the truth is not in the list are counted as COVERAGE and
+  //     scored separately, because that is the language server's job and not this one's
+  const RERANK_LONG_LIST = 10;
+  const RERANK_MIN_POSITIONS = 30;
+  const rerankOrderings = ["your editor's order (recency)", "by frequency", "reordered by this index"];
+  const rr = {};
+  const rrHits = {};
+  for (const n of rerankOrderings) {
+    rr[n] = { hit: 0, short: 0, long: 0 };
+    rrHits[n] = [];
+  }
+  let rrOffered = 0;
+  let rrTrivial = 0;
+  let rrUncovered = 0;
+  let rrScored = 0;
+  let rrShort = 0;
+  let rrLong = 0;
 
   for (const p of held) {
     const toks = lex(fs.readFileSync(p, "utf8"));
@@ -191,6 +238,35 @@ function mcnemar(aHits, bHits) {
           identHits[name].push(hit ? 1 : 0);
         }
       }
+
+      if (identCase) {
+        const offered = bufferWords(prev, "recency", prefix);
+        rrOffered++;
+        if (offered.length < 2) {
+          rrTrivial++;
+        } else if (!offered.includes(truth)) {
+          rrUncovered++;
+        } else {
+          rrScored++;
+          const long = offered.length >= RERANK_LONG_LIST;
+          if (long) rrLong++;
+          else rrShort++;
+
+          const ordered = {
+            "your editor's order (recency)": offered,
+            "by frequency": bufferWords(prev, "freq", prefix),
+            "reordered by this index": hybrid.rerankTokens(offered, prev),
+          };
+          for (const n of rerankOrderings) {
+            const hit = ordered[n][0] === truth;
+            if (hit) {
+              rr[n].hit++;
+              rr[n][long ? "long" : "short"]++;
+            }
+            rrHits[n].push(hit ? 1 : 0);
+          }
+        }
+      }
     }
   }
 
@@ -208,35 +284,101 @@ function mcnemar(aHits, bHits) {
   }
 
   const pct = (n, d) => (d ? ((100 * n) / d).toFixed(3) : "—");
-  console.log(`\n=== ${dir}`);
-  console.log(
+  const rate = (n, d) => (d ? n / d : null);
+
+  report.index = { files: train.length, tokens: model.nTokens, ms: indexMs, heldFiles: heldUsed, heldCandidates: held.length };
+  report.recital = rate(recSeen, recTotal);
+  report.positions = { scored, identifier: identScored };
+  report.arms = {};
+  for (const n of names) {
+    report.arms[n] = { top1: rate(acc[n].t1, scored), top5: rate(acc[n].t5, scored), identT1: rate(acc[n].identT1, identScored) };
+  }
+
+  say(`\n=== ${dir}`);
+  say(
     `index: ${train.length} files, ${model.nTokens.toLocaleString()} tokens, ${indexMs} ms` +
       `   held out: ${heldUsed}/${held.length} files`
   );
-  console.log(
-    `RECITAL: ${pct(recSeen, recTotal)}% of held-out 4-token contexts were already in the index` +
-      `${recSeen / Math.max(recTotal, 1) < 0.4 ? "   ← below ~40%; expect little" : ""}`
-  );
-  console.log(`\n  ${"arm".padEnd(52)} top-1    top-5    ident+1char`);
+  say(`RECITAL: ${pct(recSeen, recTotal)}% of held-out 4-token contexts were already in the index`);
+  say(`         ${recitalBand(rate(recSeen, recTotal) || 0)}`);
+  say(`\n  ${"arm".padEnd(52)} top-1    top-5    ident+1char`);
   for (const n of names) {
     const a = acc[n];
-    console.log(
+    say(
       `  ${n.padEnd(52)} ${pct(a.t1, scored).padStart(6)}  ${pct(a.t5, scored).padStart(6)}` +
         `   ${pct(a.identT1, identScored).padStart(6)}`
     );
   }
 
   const editor = "baseline: buffer words by recency  (your editor)";
-  console.log(`\n  paired vs "${editor}" on ident+1char (McNemar):`);
+  report.paired = {};
+  say(`\n  paired vs "${editor}" on ident+1char (McNemar):`);
   for (const n of Object.keys(arms)) {
     const r = mcnemar(identHits[n], identHits[editor]);
+    report.paired[n] = { ...r, significant: r.z >= 1.96 };
     const verdict = r.z >= 1.96 ? "" : "   ← NULL, not a difference";
-    console.log(
+    say(
       `    ${n.padEnd(30)} ${String(r.aOnly).padStart(4)}:${String(r.bOnly).padEnd(4)} of ${String(r.n).padEnd(5)} z=${r.z.toFixed(2)}${verdict}`
     );
   }
 
-  console.log(
-    `\nCOMPLETE : ${scored} positions scored (${identScored} identifier) across ${heldUsed} held-out files`
+  // ---- re-ranking ----------------------------------------------------------
+  const reference = "your editor's order (recency)";
+  const mine = "reordered by this index";
+  report.rerank = {
+    offered: rrOffered,
+    droppedSingleCandidate: rrTrivial,
+    truthNotInList: rrUncovered,
+    scored: rrScored,
+    coverage: rate(rrScored, rrOffered - rrTrivial),
+  };
+
+  say(`\n  RE-RANKING the list your editor would offer (buffer words, prefix-filtered):`);
+  if (rrScored < RERANK_MIN_POSITIONS) {
+    // Same refusal the rest of the harness makes: a number this thin cannot be read.
+    // The paired test needs discordant pairs, and a few dozen scorable positions rarely
+    // produce enough of them for the z to mean anything.
+    const why =
+      `only ${rrScored} scorable positions (${rrOffered} identifier positions offered a list, ` +
+      `${rrTrivial} had a single candidate, ${rrUncovered} did not contain the truth)`;
+    report.rerank.refused = why;
+    say(`    CANNOT SUPPORT A NUMBER: ${why}.`);
+    say(`    Re-ranking is a permutation, so it needs a list of at least two that holds the answer.`);
+  } else {
+    report.rerank.orderings = {};
+    for (const n of rerankOrderings) {
+      report.rerank.orderings[n] = {
+        top1: rate(rr[n].hit, rrScored),
+        top1ShortLists: rate(rr[n].short, rrShort),
+        top1LongLists: rate(rr[n].long, rrLong),
+      };
+    }
+    say(`    ${"ordering".padEnd(30)} top-1     lists <${RERANK_LONG_LIST}   lists >=${RERANK_LONG_LIST}`);
+    for (const n of rerankOrderings) {
+      say(
+        `    ${n.padEnd(30)} ${pct(rr[n].hit, rrScored).padStart(6)}    ` +
+          `${pct(rr[n].short, rrShort).padStart(6)}    ${pct(rr[n].long, rrLong).padStart(6)}`
+      );
+    }
+    const rm = mcnemar(rrHits[mine], rrHits[reference]);
+    report.rerank.paired = { ...rm, significant: rm.z >= 1.96 };
+    say(
+      `\n    paired vs "${reference}" (McNemar):  ${rm.aOnly}:${rm.bOnly} of ${rm.n}   ` +
+        `z=${rm.z.toFixed(2)}${rm.z >= 1.96 ? "" : "   ← NULL, not a difference"}`
+    );
+    say(
+      `    coverage: the truth was in the offered list at ${pct(rrScored, rrOffered - rrTrivial)}% of ` +
+        `positions; re-ranking cannot help at the rest, which is the language server's job.`
+    );
+    say(
+      `    excluded: ${rrTrivial} positions offered a single candidate, where every ordering is right.`
+    );
+  }
+
+  report.complete = { scored, identifier: identScored, heldFiles: heldUsed, rerankScored: rrScored };
+  say(
+    `\nCOMPLETE : ${scored} positions scored (${identScored} identifier, ${rrScored} re-ranked) ` +
+      `across ${heldUsed} held-out files`
   );
+  if (asJson) console.log(JSON.stringify(report, null, 2));
 }

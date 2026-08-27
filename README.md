@@ -50,6 +50,7 @@ sed -n '1,120p' src/server.js | npx lexindex ./src --stdin --json
 
 # the measurement harness ships with the package
 node node_modules/lexindex/tools/measure.mjs ./src
+node node_modules/lexindex/tools/measure.mjs --json ./src   # the same, for automation
 ```
 
 ```js
@@ -114,6 +115,32 @@ So it is two claims, and only the first is unconditional. Against what your edit
 
 Used this way it does not lose at `foo.` member positions (87.8% against 78.9% pooled, z=2.98), because as a re-ranker it never has to know what is in scope. Where tsserver leaves a long list of 30 or more candidates, reordering stops helping: z=1.86, null.
 
+### Checking it on your own repository
+
+The harness measures this too, so the claim is not one you have to take on trust:
+
+```sh
+node node_modules/lexindex/tools/measure.mjs ./src
+```
+
+```
+  RE-RANKING the list your editor would offer (buffer words, prefix-filtered):
+    ordering                       top-1     lists <10   lists >=10
+    your editor's order (recency)  66.667    68.421    62.500
+    by frequency                   48.148    57.895    25.000
+    reordered by this index        62.963    68.421    50.000
+
+    paired vs "your editor's order (recency)" (McNemar):  7:8 of 15   z=0.26   ← NULL
+    coverage: the truth was in the offered list at 72.973% of positions
+    excluded: 21 positions offered a single candidate, where every ordering is right
+```
+
+Read what that is before reading the number. **It is not the tsserver table above.** Reproducing that needs a language server, and the candidate *set* would be a different set — what is in scope, rather than what is in your buffer. What the harness reorders is the list an ordinary editor offers with no language server at all, which is a real candidate list rather than a synthetic one and needs no dependency to produce. So it answers a narrower question than the table: given the words your own editor would show you, does reordering them by this index put the right one first on your repository?
+
+Two exclusions carry weight and are printed rather than buried. A list holding one candidate makes every possible ordering correct whenever that candidate is the answer, so those positions are dropped; leaving them in inflates every row equally and flattens the comparison along with them. And re-ranking returns a permutation, so it can never invent an answer that was not offered — positions where the truth is missing from the list are reported as coverage instead of being scored, because supplying the candidate is the language server's job and not this one's.
+
+The run above is a null, on a corpus chosen for being small. That is the harness working. The table at the top of this README says plainly that there are recital ranges where this tool is expected to lose to one baseline or the other, and a harness that could not report that would not be worth shipping — which is also why it refuses outright rather than printing a number when too few positions survive the exclusions.
+
 ## What it cannot do
 
 1. **It is not type-aware.** It has no idea what is in scope or which members exist on an object, and standing alone at a `foo.` position a language server beats it outright. Its place is where no language server runs (CodeMirror and Monaco embeddings, plain-JavaScript projects, `cmp-buffer`-style setups), or as the re-ranker described above.
@@ -167,6 +194,7 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 | `completer.complete(textBeforeCursor, { k })` | lexes, finds the partial identifier, updates the buffer |
 | `completer.completeScored(...)`, `.suggestScored(...)` | the same rankings, each with the score that produced it |
 | `completer.rerank(candidates, textBeforeCursor)` | reorders another engine's list; returns a permutation, so nothing is added and nothing is dropped |
+| `completer.rerankTokens(candidates, prev)` | the same, for a caller that already holds the tokens |
 | `completer.scoreCandidates(prev, candidates)` | `Map<candidate, score>`, the blend over a supplied set |
 | `completer.session()` | a `BufferSession`: the same calls, re-lexing only what you typed |
 | `session.complete(...)`, `.completeScored(...)`, `.rerank(...)` | drop-in replacements that keep the buffer between keystrokes |
@@ -175,6 +203,7 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 | `index.replaceFileTokens(old, next)` | swap one file's counts and re-finalize |
 | `index.removeFileTokens(tokens)`, `.reopen()` | the lower-level path |
 | `index.recitalRate(tokens)` | the number from the table at the top |
+| `recitalBand(rate)` | what that number means, in one line; the CLI and the harness both print this one |
 | `lex(text)`, `isWord(t)`, `splitAtCursor(text)` | the tokenizer |
 
 The scores are comparable to each other within one call and are nothing more than that. They are not calibrated probabilities and they do not mean the same thing at two different cursors, so read them to draw a bar or to merge this ranking with another engine's — not as a confidence to cut on. Gating on confidence is the first row of the table above, and it lost three separate times.
