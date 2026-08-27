@@ -12,6 +12,7 @@ import path from "node:path";
 import { lex } from "./lex.js";
 import { CountModel } from "./count-model.js";
 import { LANGUAGES, COMMON_SKIP_DIRS, resolveLanguages } from "./languages.js";
+import { isLikelyGenerated } from "./generated.js";
 
 // The default is the JavaScript family and stays that way: every number this project
 // reports was measured on JavaScript and TypeScript, and a default that quietly widened
@@ -111,10 +112,11 @@ export function collectFiles(dir, options = {}) {
  * long-lived editor process does.
  *
  * @returns {{index: CountModel, files: number, tokens: number, ms: number, skipped: number,
- *   candidates: number, duplicates: number, tokensByFile: Map<string, string[]>|null}}
+ *   candidates: number, duplicates: number, generated: number,
+ *   tokensByFile: Map<string, string[]>|null}}
  */
 export function buildIndex(dirs, options = {}) {
-  const { order = 5, exclude = null, retainFileTokens = false } = options;
+  const { order = 5, exclude = null, retainFileTokens = false, skipGenerated = false } = options;
   const roots = Array.isArray(dirs) ? dirs : [dirs];
 
   const model = new CountModel(order);
@@ -122,6 +124,7 @@ export function buildIndex(dirs, options = {}) {
   const tokensByFile = retainFileTokens ? new Map() : null;
   let candidates = 0;
   let skipped = 0;
+  let generated = 0;
 
   // One call for every root, so a file reachable through two of them is counted once.
   const files = collectFiles(roots, options);
@@ -138,6 +141,19 @@ export function buildIndex(dirs, options = {}) {
       skipped++;
       continue;
     }
+    // Counted whether or not it is skipped. Generated code repeats itself enormously and
+    // repetition is what this index measures, so a corpus holding it reports a rate
+    // describing the generator. Reporting is the default and dropping is opt-in: this is
+    // a heuristic, and one that silently discarded a third of a repository would be worse
+    // than the problem it solves.
+    if (isLikelyGenerated(text, file)) {
+      generated++;
+      if (skipGenerated) {
+        skipped++;
+        continue;
+      }
+    }
+
     const tokens = lex(text);
     if (tokens.length) {
       model.addFileTokens(tokens);
@@ -154,6 +170,7 @@ export function buildIndex(dirs, options = {}) {
     skipped,
     candidates,
     duplicates: files.duplicates,
+    generated,
     tokensByFile,
     ms: Date.now() - started,
   };
