@@ -37,6 +37,7 @@ import { lex, isWord } from "../src/lex.js";
 import { CountModel, recitalBand } from "../src/count-model.js";
 import { Completer } from "../src/completer.js";
 import { collectFiles } from "../src/build.js";
+import { resolveLanguages } from "../src/languages.js";
 
 const HOLDOUT = Number(process.env.HOLDOUT || 0.2);
 const PER_FILE = Number(process.env.PERFILE || 25); // an uncapped harness once drew 400
@@ -45,13 +46,39 @@ const K = 5;
 
 const argv = process.argv.slice(2);
 const asJson = argv.includes("--json");
-const dirs = argv.filter((a) => a !== "--json");
+// --lang is the whole reason this harness can answer the question for a language nobody
+// here has measured. Whether the mechanism holds on your language is a question, not a
+// claim, and this is how you settle it for your repository.
+let langSpec = null;
+const dirs = [];
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === "--json") continue;
+  if (argv[i] === "--lang") {
+    langSpec = argv[++i];
+    if (langSpec === undefined) {
+      console.error("measure.mjs: --lang wants a value");
+      process.exit(2);
+    }
+    continue;
+  }
+  dirs.push(argv[i]);
+}
 if (!dirs.length) {
-  console.error("usage: measure.mjs [--json] <dir>...");
+  console.error("usage: measure.mjs [--json] [--lang <names>] <dir>...");
   process.exit(2);
 }
+let collectOpts = {};
+if (langSpec !== null) {
+  try {
+    const resolved = resolveLanguages(langSpec);
+    collectOpts = { extensions: resolved.extensions, skipDirs: resolved.skipDirs };
+  } catch (e) {
+    console.error(`measure.mjs: ${e.message}`);
+    process.exit(2);
+  }
+}
 /** Everything printed, also collected so --json can emit it without a second pass. */
-const report = { corpus: dirs.join(" + ") };
+const report = { corpus: dirs.join(" + "), language: langSpec || "javascript (default)" };
 const say = (line) => {
   if (!asJson) console.log(line);
 };
@@ -110,9 +137,12 @@ function mcnemar(aHits, bHits) {
 {
   const dir = dirs.join(" + ");
   let files = [];
-  for (const d of dirs) files.push(...collectFiles(d));
+  for (const d of dirs) files.push(...collectFiles(d, collectOpts));
   if (files.length < 4) {
-    console.error(`GATE: ${dir} has ${files.length} indexable files; need at least 4 to hold any out.`);
+    console.error(
+      `GATE: ${dir} has ${files.length} indexable files; need at least 4 to hold any out.` +
+        (langSpec === null ? `\n      Only .js/.ts is indexed by default — for another language pass --lang.` : "")
+    );
     process.exit(2);
   }
   shuffle(files, SEED);
@@ -294,7 +324,7 @@ function mcnemar(aHits, bHits) {
     report.arms[n] = { top1: rate(acc[n].t1, scored), top5: rate(acc[n].t5, scored), identT1: rate(acc[n].identT1, identScored) };
   }
 
-  say(`\n=== ${dir}`);
+  say(`\n=== ${dir}${langSpec ? `   [--lang ${langSpec}]` : ""}`);
   say(
     `index: ${train.length} files, ${model.nTokens.toLocaleString()} tokens, ${indexMs} ms` +
       `   held out: ${heldUsed}/${held.length} files`
@@ -310,16 +340,43 @@ function mcnemar(aHits, bHits) {
     );
   }
 
-  const editor = "baseline: buffer words by recency  (your editor)";
+  // The band table asks TWO questions, so the harness answers two. Collapsing them was
+  // the defect 8bb0e3d fixed in the README: beating an editor's word list and beating ten
+  // lines of frequency counting hold at different recital rates, and a null against one
+  // is not evidence about the other. A harness that tested only the first could not tell
+  // you which column of that table your repository is actually in.
+  const baselines = [
+    ["your editor's word list", "baseline: buffer words by recency  (your editor)"],
+    ["a ten-line frequency table", "baseline: repo identifiers by frequency (ctags-like)"],
+  ];
   report.paired = {};
-  say(`\n  paired vs "${editor}" on ident+1char (McNemar):`);
-  for (const n of Object.keys(arms)) {
-    const r = mcnemar(identHits[n], identHits[editor]);
-    report.paired[n] = { ...r, significant: r.z >= 1.96 };
-    const verdict = r.z >= 1.96 ? "" : "   ← NULL, not a difference";
+  for (const [label, base] of baselines) {
+    say(`\n  paired vs ${label} on ident+1char (McNemar):`);
+    report.paired[label] = {};
+    for (const n of Object.keys(arms)) {
+      const r = mcnemar(identHits[n], identHits[base]);
+      report.paired[label][n] = { ...r, significant: r.z >= 1.96 };
+      const verdict = r.z >= 1.96 ? "" : "   ← NULL, not a difference";
+      say(
+        `    ${n.padEnd(30)} ${String(r.aOnly).padStart(4)}:${String(r.bOnly).padEnd(4)} of ${String(r.n).padEnd(5)} z=${r.z.toFixed(2)}${verdict}`
+      );
+    }
+  }
+  {
+    // Say which column of the band table this corpus actually landed in, rather than
+    // leaving the reader to work it out from two z values and a threshold.
+    const h = "HYBRID           (beta=0.5)";
+    const wins = baselines.map(([label]) => [label, report.paired[label][h].significant]);
+    const beaten = wins.filter(([, ok]) => ok).map(([l]) => l);
     say(
-      `    ${n.padEnd(30)} ${String(r.aOnly).padStart(4)}:${String(r.bOnly).padEnd(4)} of ${String(r.n).padEnd(5)} z=${r.z.toFixed(2)}${verdict}`
+      `\n  VERDICT for the hybrid on this corpus: ` +
+        (beaten.length === 2
+          ? "beats both baselines"
+          : beaten.length === 1
+            ? `beats ${beaten[0]}; null against ${wins.find(([, ok]) => !ok)[0]}`
+            : "null against both baselines")
     );
+    report.verdict = { beats: beaten, of: baselines.map(([l]) => l) };
   }
 
   // ---- re-ranking ----------------------------------------------------------

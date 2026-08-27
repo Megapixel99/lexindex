@@ -44,6 +44,7 @@ npm i -D lexindex
 npx lexindex ./src --stats                        # index and report what it holds
 npx lexindex ./src --at src/server.js:120:9 -k 5  # suggest at a line and column
 npx lexindex ./src --recital src/server.js        # just the number from the table above
+npx lexindex ./service --lang python --stats      # another language; default is js/ts
 
 # complete a buffer that is not on disk yet, which is what an editor actually has
 sed -n '1,120p' src/server.js | npx lexindex ./src --stdin --json
@@ -149,6 +150,35 @@ The run above is a null, on a corpus chosen for being small. That is the harness
 4. **Comments and string contents are indexed.** That was checked rather than assumed, and it goes the other way: restricting to code-only positions lowered identifier accuracy on 4 corpora of 6.
 5. **A foreign index does not help.** Indexing one project and completing another cost 0.167 to 0.197 top-1, so there is no pretrained corpus to ship, and shipping one would be worse than nothing.
 
+## Other languages
+
+The lexer never knew what language it was reading. The defaults did: they matched the JavaScript family and nothing else, so a Python repository got `indexed 0 files` and an error telling it to check for `.js` files. The mechanism was language-agnostic and the packaging was not.
+
+```sh
+lexindex ./service --lang python --stats
+node node_modules/lexindex/tools/measure.mjs --lang go ./pkg
+```
+
+`python`, `go`, `rust`, `java`, `kotlin`, `ruby`, `c`, `cpp`, `csharp`, `php`, `swift`, `shell`, `sql`, comma-separated, or `all`. **The default is unchanged and stays JavaScript**, because every number in this README was measured on JavaScript and TypeScript corpora and a default that quietly widened would change what those numbers describe. `--lang` also brings that language's build directories with it — `target` for Rust and Java, `bin`/`obj`/`Library` for C# — on the same reasoning `node_modules` is skipped, and only when that language is asked for, since `target` and `bin` are real source directories in somebody's repository.
+
+Whether it *works* on your language is a question rather than a claim, so the harness takes `--lang` too. Seven corpora, six languages, each a single real project checked for generated and vendored code first:
+
+| language | corpus | files | recital | hybrid | vs word list | vs frequency table |
+|---|---|---|---|---|---|---|
+| Python | falken/service | 213 | 64.2% | **78.5%** | 32.6% (z=16.49) | 30.2% (z=17.90) |
+| Python | stable-diffusion-webui | 117 | 35.2% | **60.9%** | 34.2% (z=8.11) | 24.7% (z=10.55) |
+| Go | mailslurper/pkg | 66 | 55.3% | **66.2%** | 16.9% (z=10.87) | 24.8% (z=10.37) |
+| Java | Bukkit | 814 | 61.5% | **68.8%** | 33.9% (z=28.58) | 31.1% (z=31.19) |
+| Ruby | canvas/app | 796 | 65.0% | **76.7%** | 23.4% (z=37.22) | 28.0% (z=36.65) |
+| Swift | GamePigeonClone | 100 | 56.5% | **69.5%** | 35.1% (z=9.53) | 28.6% (z=11.05) |
+| C | D2XX | 48 | 53.3% | **62.7%** | 28.8% (z=6.55) | 20.3% (z=8.13) |
+
+`ident+1char`, held-out files, paired McNemar. The hybrid beat both baselines on all seven, and the gaps are large rather than merely significant.
+
+Read two limits into that before quoting it. **These corpora do not re-derive the thresholds in the table at the top of this README**, which came from JavaScript and TypeScript; several are far larger than the corpora behind those nulls, and z grows with the square root of the sample, so significance arrives more easily here than it did there — which is exactly why the row at 35.2% recital clears the frequency table when the table says that takes about 60%. The band the CLI prints is still the JavaScript-derived one. And seven corpora is seven corpora: it says the mechanism carries, not that it carries at any particular rate on your repository. That is what the harness is for.
+
+The warning in *What it cannot do* about corpus choice applies with more force here, not less. Generated code is more common outside the JavaScript world — protobuf stubs, OpenAPI clients, ORM scaffolding — and generated code repeats itself enormously, which is precisely what this tool measures. Every corpus above was checked for it before being counted.
+
 ## Seven things it deliberately does not do
 
 Each was implemented, measured, and rejected in the research this derives from. They are absent on purpose, and re-adding one without re-running the measurement would be undoing a result.
@@ -205,6 +235,7 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 | `index.recitalRate(tokens)` | the number from the table at the top |
 | `recitalBand(rate)` | what that number means, in one line; the CLI and the harness both print this one |
 | `lex(text)`, `isWord(t)`, `splitAtCursor(text)` | the tokenizer |
+| `resolveLanguages(spec)`, `LANGUAGES` | `"python"` or `"py,go"` to `{ extensions, skipDirs }`; also `buildIndex(dirs, { languages })` |
 
 The scores are comparable to each other within one call and are nothing more than that. They are not calibrated probabilities and they do not mean the same thing at two different cursors, so read them to draw a bar or to merge this ranking with another engine's — not as a confidence to cut on. Gating on confidence is the first row of the table above, and it lost three separate times.
 
@@ -274,7 +305,10 @@ lexindex <dir>... [options]
     --recital <file>              just the recital rate of <file> against the index
   index
     --beta <n>                    0 repo only, 1 buffer only, default 0.5
-    --ext <regex>                 which filenames to index (default js/ts family)
+    --lang <names>                index another language: python, go, rust, java,
+                                  ruby, c, cpp, csharp, php, swift, kotlin, shell,
+                                  sql, or "all". Comma-separated. Default javascript.
+    --ext <regex>                 which filenames to index (overrides --lang)
     --exclude <regex>             drop matching paths from the corpus
     --max-bytes <n>               skip files larger than this (default 400000)
 ```
