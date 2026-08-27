@@ -75,6 +75,22 @@ export class Completer {
    * @returns {string[]} up to k tokens, best first
    */
   suggest(prev, { k = 5, prefix = null } = {}) {
+    return this.suggestScored(prev, { k, prefix }).map((e) => e.token);
+  }
+
+  /**
+   * `suggest`, with the score that produced each ranking.
+   *
+   * The scores are comparable to each other within one call and are nothing more than
+   * that: they are not calibrated probabilities, and they do not mean the same thing
+   * between two different cursors. Read them to show a bar, to merge this ranking with
+   * another engine's, or to break your own ties — not as a confidence to cut on.
+   * Gating on confidence is one of the seven things listed above: it was measured three
+   * separate times and was "dominated on both axes" every time.
+   *
+   * @returns {{token: string, score: number}[]} up to k entries, best first
+   */
+  suggestScored(prev, { k = 5, prefix = null } = {}) {
     let repo = this.index.predict(prev);
 
     let local = new Set();
@@ -112,7 +128,7 @@ export class Completer {
     // Ties break on the token, deterministically, so the same input always gives the same
     // list — a completion UI that reorders on redraw is worse than a wrong one.
     scored.sort((x, y) => y[0] - x[0] || (x[1] < y[1] ? 1 : x[1] > y[1] ? -1 : 0));
-    return scored.slice(0, k).map(([, w]) => w);
+    return scored.slice(0, k).map(([score, token]) => ({ token, score }));
   }
 
   /**
@@ -123,6 +139,13 @@ export class Completer {
     const { prev, prefix } = splitAtCursor(textBeforeCursor);
     this.setBuffer(prev);
     return this.suggest(prev, { k, prefix });
+  }
+
+  /** `complete`, returning `{token, score}` entries. See `suggestScored` on the scores. */
+  completeScored(textBeforeCursor, { k = 5 } = {}) {
+    const { prev, prefix } = splitAtCursor(textBeforeCursor);
+    this.setBuffer(prev);
+    return this.suggestScored(prev, { k, prefix });
   }
 
   /**

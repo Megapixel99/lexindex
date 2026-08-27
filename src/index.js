@@ -14,4 +14,4 @@ export { lex, isWord, splitAtCursor } from "./lex.js";
 export { CountModel } from "./count-model.js";
 export { CacheModel } from "./cache-model.js";
 export { Completer } from "./completer.js";
-export { buildIndex, collectFiles } from "./build.js";
+export { buildIndex, updateIndexFile, collectFiles } from "./build.js";

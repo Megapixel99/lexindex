@@ -38,37 +38,121 @@ export class CountModel {
     this.finalized = false;
   }
 
-  /** Add one file's tokens. Cheap to call many times; call finalize() when done. */
+  /**
+   * Add one file's tokens. Cheap to call many times; call finalize() when done.
+   *
+   * The context keys are built by rolling one token onto the front of the previous
+   * order's key rather than by `slice().join()` per order, which is the same string with
+   * one concatenation instead of an array allocation and a join. Counting dominates build
+   * time by an order of magnitude over lexing, so this loop is the build.
+   */
   addFileTokens(tokens) {
     if (this.finalized) throw new Error("CountModel: cannot add after finalize()");
 
-    const unigrams = this.tabs[0];
-    let uni = unigrams.get("");
-    if (!uni) {
-      uni = new Map();
-      unigrams.set("", uni);
-    }
+    const uni = this._unigrams();
     for (const w of tokens) uni.set(w, (uni.get(w) || 0) + 1);
 
-    for (let L = 1; L < this.order; L++) {
-      const tab = this.tabs[L];
-      for (let t = L; t < tokens.length; t++) {
-        const ctx = tokens.slice(t - L, t).join(SEP);
+    const n = tokens.length;
+    for (let t = 1; t < n; t++) {
+      const w = tokens[t];
+      const maxL = Math.min(this.order - 1, t);
+      let ctx = "";
+      for (let L = 1; L <= maxL; L++) {
+        ctx = L === 1 ? tokens[t - 1] : tokens[t - L] + SEP + ctx;
+        const tab = this.tabs[L];
         let counts = tab.get(ctx);
         if (!counts) {
           counts = new Map();
           tab.set(ctx, counts);
         }
-        const w = tokens[t];
         counts.set(w, (counts.get(w) || 0) + 1);
       }
     }
 
-    this.nTokens += tokens.length;
+    this.nTokens += n;
     this.nFiles += 1;
   }
 
-  /** Precompute the totals prediction needs. Must be called before predict(). */
+  /**
+   * The exact inverse of `addFileTokens`: subtract one file's contribution.
+   *
+   * This is what makes the index maintainable in a long-lived process. An editor that
+   * rebuilt from scratch on every save would pay the whole build cost per keystroke-ish
+   * event; removing one file's counts and adding the new ones costs a few milliseconds.
+   *
+   * Counts that reach zero are DELETED rather than left at 0. A context left behind with
+   * an empty count map would still answer `recitalRate` — the index would go on claiming
+   * to have seen text that has been deleted, which is the one number this project asks
+   * people to trust.
+   */
+  removeFileTokens(tokens) {
+    if (this.finalized) throw new Error("CountModel: cannot remove after finalize()");
+
+    const uni = this._unigrams();
+    for (const w of tokens) {
+      const c = uni.get(w);
+      if (c === undefined) continue;
+      if (c <= 1) uni.delete(w);
+      else uni.set(w, c - 1);
+    }
+
+    const n = tokens.length;
+    for (let t = 1; t < n; t++) {
+      const w = tokens[t];
+      const maxL = Math.min(this.order - 1, t);
+      let ctx = "";
+      for (let L = 1; L <= maxL; L++) {
+        ctx = L === 1 ? tokens[t - 1] : tokens[t - L] + SEP + ctx;
+        const tab = this.tabs[L];
+        const counts = tab.get(ctx);
+        if (!counts) continue;
+        const c = counts.get(w);
+        if (c === undefined) continue;
+        if (c <= 1) {
+          counts.delete(w);
+          if (counts.size === 0) tab.delete(ctx);
+        } else {
+          counts.set(w, c - 1);
+        }
+      }
+    }
+
+    this.nTokens -= n;
+    this.nFiles -= 1;
+    if (this.nFiles < 0) this.nFiles = 0;
+    if (this.nTokens < 0) this.nTokens = 0;
+  }
+
+  /**
+   * Swap one file's contribution for another's and re-finalize, in one call.
+   *
+   * `replaceFileTokens(old, next)` is an edit, `replaceFileTokens(null, next)` is a new
+   * file, and `replaceFileTokens(old, null)` is a deletion. This is the whole API a file
+   * watcher or a language server needs.
+   */
+  replaceFileTokens(oldTokens, newTokens) {
+    this.reopen();
+    if (oldTokens && oldTokens.length) this.removeFileTokens(oldTokens);
+    if (newTokens && newTokens.length) this.addFileTokens(newTokens);
+    return this.finalize();
+  }
+
+  /** Undo `finalize()` so the index can be added to or subtracted from again. */
+  reopen() {
+    this.finalized = false;
+    return this;
+  }
+
+  _unigrams() {
+    let uni = this.tabs[0].get("");
+    if (!uni) {
+      uni = new Map();
+      this.tabs[0].set("", uni);
+    }
+    return uni;
+  }
+
+  /** Precompute what prediction needs. Must be called before predict(). */
   finalize() {
     this.uni = this.tabs[0].get("") || new Map();
     this.uniTotal = 0;
@@ -83,19 +167,30 @@ export class CountModel {
     this.topUnigrams = sorted.slice(0, TOP_UNIGRAM_CANDIDATES);
     this.wordsByFrequency = sorted.filter(isWord);
 
+    // Context totals are memoized on first use rather than swept eagerly. A prediction
+    // touches at most `order - 1` contexts, so summing them on demand costs nothing
+    // measurable, while the eager sweep was proportional to the whole table — and it ran
+    // again on every finalize(), which is what an incremental update calls per file save.
+    // Dropping the memo here is also the cache invalidation: counts that just changed
+    // cannot leave a stale total behind.
     this.ctxTotals = [];
-    for (let L = 0; L < this.order; L++) {
-      const m = new Map();
-      for (const [ctx, counts] of this.tabs[L]) {
-        let s = 0;
-        for (const v of counts.values()) s += v;
-        m.set(ctx, s);
-      }
-      this.ctxTotals.push(m);
-    }
+    for (let L = 0; L < this.order; L++) this.ctxTotals.push(new Map());
+    this.ctxTotals[0].set("", this.uniTotal);
 
     this.finalized = true;
     return this;
+  }
+
+  /** How many times context `ctx` was seen at order L. Summed once, then remembered. */
+  _ctxTotal(L, ctx, counts) {
+    const memo = this.ctxTotals[L];
+    let n = memo.get(ctx);
+    if (n === undefined) {
+      n = 0;
+      for (const v of counts.values()) n += v;
+      memo.set(ctx, n);
+    }
+    return n;
   }
 
   /**
@@ -114,7 +209,7 @@ export class CountModel {
       const ctx = prev.slice(prev.length - L).join(SEP);
       const counts = this.tabs[L].get(ctx);
       if (!counts) continue;
-      const n = this.ctxTotals[L].get(ctx);
+      const n = this._ctxTotal(L, ctx, counts);
       const lam = n / (n + counts.size); // Witten-Bell
       weights.push([counts, residual * lam, n]);
       residual *= 1 - lam;

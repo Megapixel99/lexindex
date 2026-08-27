@@ -33,8 +33,12 @@ npm i -D lexindex
 ```
 
 ```sh
-npx lexindex ./src --stats                       # index and report what it holds
-npx lexindex ./src --at src/server.js:2400 -k 5  # suggest at a byte offset
+npx lexindex ./src --stats                        # index and report what it holds
+npx lexindex ./src --at src/server.js:120:9 -k 5  # suggest at a line and column
+npx lexindex ./src --recital src/server.js        # just the number from the table above
+
+# complete a buffer that is not on disk yet, which is what an editor actually has
+sed -n '1,120p' src/server.js | npx lexindex ./src --stdin --json
 
 # the measurement harness ships with the package
 node node_modules/lexindex/tools/measure.mjs ./src
@@ -150,16 +154,75 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 
 | | |
 |---|---|
-| `buildIndex(dirs, opts)` | `{ index, files, tokens, ms, candidates, skipped }` |
+| `buildIndex(dirs, opts)` | `{ index, files, tokens, ms, candidates, skipped, tokensByFile }` |
 | `new Completer(index, { cacheBeta })` | `cacheBeta` 0 is repo only, 1 is buffer only, default 0.5 |
 | `completer.complete(textBeforeCursor, { k })` | lexes, finds the partial identifier, updates the buffer |
+| `completer.completeScored(...)`, `.suggestScored(...)` | the same rankings, each with the score that produced it |
 | `completer.rerank(candidates, textBeforeCursor)` | reorders another engine's list; returns a permutation, so nothing is added and nothing is dropped |
 | `completer.scoreCandidates(prev, candidates)` | `Map<candidate, score>`, the blend over a supplied set |
 | `completer.setBuffer(tokens)` and `.suggest(prev, { k, prefix })` | the lower-level path |
+| `updateIndexFile(built, file, text?)` | re-index one file in place; omit `text` to read from disk, pass `null` if it was deleted |
+| `index.replaceFileTokens(old, next)` | swap one file's counts and re-finalize |
+| `index.removeFileTokens(tokens)`, `.reopen()` | the lower-level path |
 | `index.recitalRate(tokens)` | the number from the table at the top |
 | `lex(text)`, `isWord(t)`, `splitAtCursor(text)` | the tokenizer |
 
+The scores are comparable to each other within one call and are nothing more than that. They are not calibrated probabilities and they do not mean the same thing at two different cursors, so read them to draw a bar or to merge this ranking with another engine's — not as a confidence to cut on. Gating on confidence is the first row of the table above, and it lost three separate times.
+
 `setBuffer` is incremental: extending the previous buffer reuses the cache instead of rebuilding it, which is what keeps the per-keystroke cost flat. On a 369-file, 560K-token index, building takes 1.07 s and a suggestion takes 0.36 ms at the median (p99 3.30 ms).
+
+## Keeping the index current while you edit
+
+An index built once goes stale the moment you save a file, and rebuilding the tree on every save is not an option in a process that has to answer a keystroke. So one file's contribution can be subtracted and its replacement added, which costs a file rather than a repository:
+
+```js
+import { buildIndex, updateIndexFile, Completer } from "lexindex";
+
+const built = buildIndex("./src", { retainFileTokens: true });
+const completer = new Completer(built.index);
+
+updateIndexFile(built, "src/server.js");                 // re-read it from disk
+updateIndexFile(built, "src/server.js", editor.text);    // or hand it the unsaved buffer
+updateIndexFile(built, "src/gone.js", null);             // deleted
+```
+
+`retainFileTokens` is what keeps each file's tokens around to be subtracted later, and it is opt-in because it costs memory proportional to the corpus — a one-shot CLI run has no use for it and a long-lived editor process does.
+
+The result is not an approximation of a rebuilt index. It is exactly equal to one, which the suite asserts over edits, deletions, additions and long sequences of edits by comparing the whole count table against a rebuild. On a corpus of 400 files and 422,598 tokens, one file's update took 4.13 ms at the median against 585 ms to rebuild.
+
+That exactness is worth more than the speed. A count left behind at zero would be invisible in a suggestion list and perfectly visible in `recitalRate`, which reads the context tables directly — the index would go on claiming it had seen text that had been deleted, and the recital rate is the one number this project asks anybody to trust.
+
+## The CLI
+
+```
+lexindex <dir>... [options]
+
+  position
+    --at <file>:<offset>          complete at a byte offset
+    --at <file>:<line>:<col>      complete at a 1-based line and column
+    --stdin                       read the buffer from stdin rather than from disk;
+                                  with no --at, complete at the end of what was piped
+  output
+    -k <n>                        how many suggestions (default 5)
+    --json                        one JSON object: suggestions, scores, recital, index
+    --stats                       report what the index holds
+    --recital <file>              just the recital rate of <file> against the index
+  index
+    --beta <n>                    0 repo only, 1 buffer only, default 0.5
+    --ext <regex>                 which filenames to index (default js/ts family)
+    --exclude <regex>             drop matching paths from the corpus
+    --max-bytes <n>               skip files larger than this (default 400000)
+```
+
+`--stdin` is the one that matters for an editor, because the buffer an editor wants completed is unsaved by definition and a byte offset into the file on disk is an offset into the wrong text. Piping the text above the cursor and reading the list back is the whole integration:
+
+```sh
+sed -n '1,120p' src/server.js | lexindex ./src --stdin --json
+```
+
+Suggestions go to stdout one per line and everything else goes to stderr, so the plain form stays usable in a pipe. `--json` puts the same list on stdout with the scores, the recital rate and the band it falls in, which saves an integration from parsing prose.
+
+`--ext` and `--exclude` exist because corpus choice is the largest free parameter in a completion benchmark, and the README above spends a numbered point on the three separate ways it inflated this project's own headline. If you widen the net past the defaults, say what you indexed when you quote the number.
 
 ## Exit codes
 
@@ -167,7 +230,7 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 |---|---|
 | `0` | ran, produced output |
 | `1` | ran, nothing to suggest |
-| `2` | could not measure: too few files, zero scored positions, or a scorer never observed producing both a hit and a miss |
+| `2` | could not run, or could not measure: a usage error, an unreadable file, an index of zero files, too few files to hold any out, zero scored positions, or a scorer never observed producing both a hit and a miss |
 
 The third exists because a clean result from an instrument that could not fail is worth nothing; `measure` refuses rather than printing a number it cannot support.
 
