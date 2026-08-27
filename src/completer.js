@@ -44,6 +44,7 @@ const PRUNE = 500;
  * output to sorting and slicing, rather than merely equivalent output.
  */
 function topK(items, k, cmp) {
+  if (k <= 0) return [];
   if (k >= items.length) return items.sort(cmp);
   const best = [];
   for (const it of items) {
