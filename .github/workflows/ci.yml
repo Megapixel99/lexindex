@@ -34,3 +34,15 @@ jobs:
       - name: the package ships what the README tells people to run
         run: |
           npm pack --dry-run 2>&1 | grep -q 'tools/measure.mjs'
+
+      # Install the real tarball rather than trusting the source tree. `exports` shipped
+      # once as a bare string, which permits no subpaths, so `require('lexindex/package.json')`
+      # threw ERR_PACKAGE_PATH_NOT_EXPORTED for any tool that reads a dependency's manifest.
+      # Nothing in the source tree could catch that; only an install can.
+      - name: an installed copy resolves both the entry point and the manifest
+        run: |
+          tarball="$(npm pack --silent)"
+          mkdir /tmp/consumer && cd /tmp/consumer && npm init -y > /dev/null
+          npm i "$GITHUB_WORKSPACE/$tarball" --silent
+          node -e "const v=require('lexindex/package.json').version; console.log('manifest subpath ok', v)"
+          node -e "import('lexindex').then(m=>{if(!m.buildIndex||!m.Completer)throw new Error('missing exports');console.log('entry point ok')})"
