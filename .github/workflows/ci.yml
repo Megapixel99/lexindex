@@ -70,3 +70,30 @@ jobs:
           npm i "$GITHUB_WORKSPACE/$tarball" --silent
           node -e "const v=require('lexindex/package.json').version; console.log('manifest subpath ok', v)"
           node -e "import('lexindex').then(m=>{if(!m.buildIndex||!m.Completer)throw new Error('missing exports');console.log('entry point ok')})"
+          # Both binaries must be on PATH in a real install, not just present in the tree.
+          test -x node_modules/.bin/lexindex     || { echo "::error::lexindex not installed as a binary"; exit 1; }
+          test -x node_modules/.bin/lexindex-lsp || { echo "::error::lexindex-lsp not installed as a binary"; exit 1; }
+          echo 'export const consumerSymbol = 1;' > sample.js
+          node_modules/.bin/lexindex . --stats
+          # Drive the installed server the way an editor does: one framed initialize, one
+          # framed reply. A server that ships but cannot answer a handshake is not shipped.
+          node -e '
+            const { spawn } = require("child_process");
+            const p = spawn("node_modules/.bin/lexindex-lsp", [], { stdio: ["pipe", "pipe", "inherit"] });
+            const body = Buffer.from(JSON.stringify({
+              jsonrpc: "2.0", id: 1, method: "initialize",
+              params: { rootUri: "file://" + process.cwd(), capabilities: {} },
+            }), "utf8");
+            p.stdin.write("Content-Length: " + body.length + "\r\n\r\n");
+            p.stdin.write(body);
+            let out = "";
+            const timer = setTimeout(() => { console.error("no reply from lexindex-lsp"); process.exit(1); }, 20000);
+            p.stdout.on("data", (d) => {
+              out += d;
+              if (!out.includes("completionProvider")) return;
+              clearTimeout(timer);
+              console.log("language server handshake ok");
+              p.kill();
+              process.exit(0);
+            });
+          ' 

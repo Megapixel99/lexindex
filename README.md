@@ -323,6 +323,56 @@ Suggestions go to stdout one per line and everything else goes to stderr, so the
 
 `--ext` and `--exclude` exist because corpus choice is the largest free parameter in a completion benchmark, and the README above spends a numbered point on the three separate ways it inflated this project's own headline. If you widen the net past the defaults, say what you indexed when you quote the number.
 
+## In your editor
+
+The tool has always said where it belongs — *where no language server runs* — and then shipped one CLI, leaving everybody to build the same bridge. So it ships a language server now, speaking completion and nothing else, over the protocol every editor already knows.
+
+```sh
+npx lexindex-lsp                 # indexes the workspace root the editor reports
+npx lexindex-lsp --lang python   # or another language
+```
+
+**Neovim**
+
+```lua
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = { "javascript", "typescript" },
+  callback = function()
+    vim.lsp.start({
+      name = "lexindex",
+      cmd = { "npx", "lexindex-lsp" },
+      root_dir = vim.fs.root(0, { ".git", "package.json" }),
+    })
+  end,
+})
+```
+
+**Helix**, in `languages.toml` — note it sits *beside* the type-aware server rather than replacing it:
+
+```toml
+[language-server.lexindex]
+command = "npx"
+args = ["lexindex-lsp"]
+
+[[language]]
+name = "javascript"
+language-servers = ["typescript-language-server", "lexindex"]
+```
+
+**Emacs**, with eglot:
+
+```elisp
+(add-to-list 'eglot-server-programs '(js-mode . ("npx" "lexindex-lsp")))
+```
+
+Running it alongside a real language server is the intended arrangement wherever one exists, and the reason is the first entry in *What it cannot do*: this thing is not type-aware, has no idea what is in scope, and loses outright at a `foo.` position. What it contributes is the frequency signal the others have no notion of. Most editors merge completions from several servers, so you get both.
+
+`initializationOptions` takes `lang`, `beta`, `k` and `dirs`, matching the CLI's flags.
+
+Two details are worth knowing because they are decisions rather than defaults. Completions are identifier-shaped only: the measurements score punctuation because a fair benchmark has to, but a popup offering `;` is noise, and aggregate top-1 is mostly punctuation for every engine including this one. And every item carries a `sortText`, because an editor that re-sorts alphabetically throws away the only thing this server contributes.
+
+It reports the recital rate to the editor's log as each document opens, with the band it falls in. That number decides whether any of this is worth having, and a server that quietly served weak completions without ever saying so would be the one place in this project where it was hidden.
+
 ## Exit codes
 
 | | |
