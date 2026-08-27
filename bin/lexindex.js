@@ -31,6 +31,7 @@ let extRe = null;
 let excludeRe = null;
 let maxBytes = null;
 let langSpec = null;
+let skipGenerated = false;
 
 function usage() {
   console.log(`usage: lexindex <dir>... [options]
@@ -52,6 +53,8 @@ function usage() {
                                   sql, or "all". Comma-separated. Default javascript.
     --ext <regex>                 which filenames to index (overrides --lang)
     --exclude <regex>             drop matching paths from the corpus
+    --skip-generated              drop files that look generated (protobuf stubs,
+                                  parser tables, minified bundles). Reported either way.
     --max-bytes <n>               skip files larger than this (default 400000)
 
 examples
@@ -88,6 +91,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "--stats") stats = true;
   else if (a === "--json") json = true;
   else if (a === "--stdin") useStdin = true;
+  else if (a === "--skip-generated") skipGenerated = true;
   else if (a === "-h" || a === "--help") {
     usage();
     process.exit(0);
@@ -135,6 +139,7 @@ if (excludeRe !== null) {
   buildOpts.exclude = (file) => re.test(file);
 }
 if (maxBytes !== null) buildOpts.maxBytes = maxBytes;
+buildOpts.skipGenerated = skipGenerated;
 
 const built = buildIndex(dirs, buildOpts);
 if (built.files === 0) {
@@ -158,6 +163,8 @@ const indexReport = {
   candidates: built.candidates,
   skipped: built.skipped,
   duplicates: built.duplicates,
+  generated: built.generated,
+  generatedSkipped: skipGenerated,
   tokens: built.tokens,
   vocab: built.index.uni.size,
   ms: built.ms,
@@ -193,6 +200,15 @@ if (stats || (!at && !useStdin)) {
     console.log(`vocab    : ${built.index.uni.size.toLocaleString()} distinct tokens`);
     console.log(`built in : ${built.ms} ms`);
     console.log(`COMPLETE : ${built.files + built.skipped} of ${built.candidates} accounted for`);
+  }
+  if (built.generated > 0) {
+    // Generated code repeats itself, and repetition is the whole of what this measures.
+    const one = built.generated === 1;
+    console.error(
+      `lexindex: ${built.generated} file${one ? "" : "s"} ${one ? "looks" : "look"} generated and ` +
+        `${one ? "was" : "were"} ${skipGenerated ? "excluded" : "indexed"}.` +
+        (skipGenerated ? "" : " Re-run with --skip-generated to see the difference.")
+    );
   }
   if (built.duplicates > 0) {
     // Counted once, and said out loud. Overlapping paths inflate the recital rate, which

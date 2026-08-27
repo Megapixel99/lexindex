@@ -38,6 +38,7 @@ import { CountModel, recitalBand } from "../src/count-model.js";
 import { Completer } from "../src/completer.js";
 import { collectFiles } from "../src/build.js";
 import { resolveLanguages } from "../src/languages.js";
+import { isLikelyGenerated } from "../src/generated.js";
 
 const HOLDOUT = Number(process.env.HOLDOUT || 0.2);
 const PER_FILE = Number(process.env.PERFILE || 25); // an uncapped harness once drew 400
@@ -46,13 +47,14 @@ const K = 5;
 
 const argv = process.argv.slice(2);
 const asJson = argv.includes("--json");
+const skipGenerated = argv.includes("--skip-generated");
 // --lang is the whole reason this harness can answer the question for a language nobody
 // here has measured. Whether the mechanism holds on your language is a question, not a
 // claim, and this is how you settle it for your repository.
 let langSpec = null;
 const dirs = [];
 for (let i = 0; i < argv.length; i++) {
-  if (argv[i] === "--json") continue;
+  if (argv[i] === "--json" || argv[i] === "--skip-generated") continue;
   if (argv[i] === "--lang") {
     langSpec = argv[++i];
     if (langSpec === undefined) {
@@ -64,7 +66,7 @@ for (let i = 0; i < argv.length; i++) {
   dirs.push(argv[i]);
 }
 if (!dirs.length) {
-  console.error("usage: measure.mjs [--json] [--lang <names>] <dir>...");
+  console.error("usage: measure.mjs [--json] [--lang <names>] [--skip-generated] <dir>...");
   process.exit(2);
 }
 let collectOpts = {};
@@ -142,7 +144,22 @@ function mcnemar(aHits, bHits) {
   // the recital rate, which is the number this harness exists to report honestly.
   const collected = collectFiles(dirs, collectOpts);
   const duplicates = collected.duplicates;
-  const files = [...collected];
+  let files = [...collected];
+
+  // Generated code repeats itself enormously and repetition is what is being measured, so
+  // a corpus holding it reports a rate describing the generator rather than the
+  // repository. Counted always, dropped only when asked.
+  const generatedFiles = files.filter((f) => {
+    try {
+      return !!isLikelyGenerated(fs.readFileSync(f, "utf8"), f);
+    } catch {
+      return false;
+    }
+  });
+  if (skipGenerated) {
+    const drop = new Set(generatedFiles);
+    files = files.filter((f) => !drop.has(f));
+  }
   if (files.length < 4) {
     console.error(
       `GATE: ${dir} has ${files.length} indexable files; need at least 4 to hold any out.` +
@@ -330,6 +347,17 @@ function mcnemar(aHits, bHits) {
   }
 
   say(`\n=== ${dir}${langSpec ? `   [--lang ${langSpec}]` : ""}`);
+  if (generatedFiles.length > 0) {
+    report.generated = generatedFiles.length;
+    report.generatedSkipped = skipGenerated;
+    const one = generatedFiles.length === 1;
+    say(
+      `NOTE: ${generatedFiles.length} of ${collected.length} files ${one ? "looks" : "look"} generated ` +
+        `and ${one ? "was" : "were"} ${skipGenerated ? "EXCLUDED" : "INCLUDED"}. Generated code repeats ` +
+        `itself, which is exactly what is measured here` +
+        `${skipGenerated ? "." : " — re-run with --skip-generated to see the difference."}`
+    );
+  }
   if (duplicates > 0) {
     report.duplicates = duplicates;
     say(
