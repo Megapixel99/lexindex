@@ -1,5 +1,9 @@
 # lexindex
 
+[![npm](https://img.shields.io/npm/v/lexindex?label=npm&color=CB3837)](https://www.npmjs.com/package/lexindex)
+[![ci](https://github.com/Megapixel99/lexindex/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Megapixel99/lexindex/actions/workflows/ci.yml)
+[![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 Code completion from your own repository's statistics: an n-gram index over the files you already have, blended with a cache over the buffer you are editing. No model file, no network, no telemetry. `dependencies` and `devDependencies` are both empty, which a reader can check in `package.json`.
 
 The counting mechanism is not new work. It is a JavaScript implementation of a well-studied idea (n-gram language models over source code, with a cache for the file being edited), and it was validated against an existing reference implementation before it was trusted: 15 of 15 identical top-5 lists across the full range of the blend parameter. See [Prior art](#prior-art) for the papers.
@@ -9,8 +13,7 @@ The counting mechanism is not new work. It is a JavaScript implementation of a w
 The recital rate is how often a four-token context in a held-out file was already somewhere in the index; it is the honest predictor of whether any of this is worth installing, and it varies from 13.5% to 72.9% across the nine corpora measured so far.
 
 ```sh
-git clone https://github.com/Megapixel99/lexindex && cd lexindex
-node bin/lexindex.js /path/to/your/repo --stats
+npx lexindex /path/to/your/repo --stats
 ```
 
 | your recital | what to expect | the evidence |
@@ -25,16 +28,20 @@ The tool says which band you are in rather than letting you discover it: `measur
 
 ## Install
 
-Not published to npm yet. Until it is, clone it; since there are no dependencies, cloning is the install.
+```sh
+npm i -D lexindex
+```
 
 ```sh
-node bin/lexindex.js ./src --stats                       # index and report what it holds
-node bin/lexindex.js ./src --at src/server.js:2400 -k 5  # suggest at a byte offset
-node tools/measure.mjs ./src                             # is it beating your editor here?
+npx lexindex ./src --stats                       # index and report what it holds
+npx lexindex ./src --at src/server.js:2400 -k 5  # suggest at a byte offset
+
+# the measurement harness ships with the package
+node node_modules/lexindex/tools/measure.mjs ./src
 ```
 
 ```js
-import { buildIndex, Completer } from "./lexindex/src/index.js";
+import { buildIndex, Completer } from "lexindex";
 
 const { index } = buildIndex("./src");
 const completer = new Completer(index);
@@ -44,7 +51,7 @@ completer.complete("const conf");   // ["config", "configure", ...]
 
 ## Does it beat what your editor already does for free?
 
-That is the only question worth asking about a completion engine, and it is the one most completion benchmarks avoid by reporting an accuracy with nothing beside it; every editor already offers the words in your open buffers. Run `node tools/measure.mjs` against your own repository and find out. Here is a real application at 45.8% recital:
+That is the only question worth asking about a completion engine, and it is the one most completion benchmarks avoid by reporting an accuracy with nothing beside it; every editor already offers the words in your open buffers. Run the harness against your own repository and find out. Here is a real application at 45.8% recital:
 
 ```
   arm                                                  top-1    top-5    ident+1char
@@ -66,7 +73,7 @@ Across nine corpora the hybrid beat the word-based baseline in eight, with paire
 Several directories are treated as one corpus, matching `buildIndex`. Measuring them separately splits a repository into underpowered samples; on a repository whose JavaScript lives in three folders, that was the difference between three nulls (z=1.13, 0.58, 1.63) and one answer (z=5.74).
 
 ```sh
-node tools/measure.mjs ./tinyHardware ./tools ./assay/js    # one index, one result
+node node_modules/lexindex/tools/measure.mjs ./src ./scripts ./tools   # one index, one result
 ```
 
 Which half carries the mechanism depends on the same number. On a repetitive repository the index dominates and the cache adds little; below roughly 40% recital the index alone becomes statistically null and only the blend wins. Neither arm is the tool, and that is the argument for the fixed 0.5 blend rather than for either half.
