@@ -57,6 +57,39 @@ export class CacheModel {
     this._uni = null;
   }
 
+  /**
+   * Drop everything after the first `n` tokens, exactly undoing the `add`s that put them
+   * there. The mirror of `add`, and what lets a cursor sitting inside a partly-typed word
+   * roll the buffer back a token or two rather than rebuilding it.
+   */
+  truncate(n) {
+    const s = this.tokens;
+    if (n >= s.length) return;
+    if (n < 0) n = 0;
+
+    for (let t = s.length - 1; t >= n; t--) {
+      const w = s[t];
+      for (let L = 0; L < this.order; L++) {
+        if (t < L) continue;
+        const ctx = L === 0 ? "" : s.slice(t - L, t).join(SEP);
+        const counts = this.tabs[L].get(ctx);
+        if (!counts) continue;
+        const c = counts.get(w);
+        if (c === undefined) continue;
+        if (c <= 1) {
+          counts.delete(w);
+          if (counts.size === 0) this.tabs[L].delete(ctx);
+        } else {
+          counts.set(w, c - 1);
+        }
+      }
+    }
+
+    s.length = n;
+    this.n = n;
+    this._uni = null;
+  }
+
   _unigram() {
     if (this._uni === null) {
       const uni = this.tabs[0].get("") || new Map();

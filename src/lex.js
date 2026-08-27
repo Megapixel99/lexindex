@@ -28,6 +28,31 @@ export function isWord(token) {
 }
 
 /**
+ * The offset at which the run of word characters ending the text begins.
+ *
+ * This is the only position an incremental lexer needs to know about. A token under this
+ * regex is an identifier, a number, or ONE non-word character, so no token can span a
+ * non-word character — which makes any position whose preceding character is a non-word
+ * character a point where the lexing of everything before it is settled, whatever gets
+ * typed after it. `"const conf"` returns 6, and re-lexing from 6 can never change how
+ * `const` was tokenized.
+ *
+ * The run itself may hold more than one token (`"12ab"` lexes as `12`, `ab`), so callers
+ * must count what it holds rather than assuming one.
+ */
+export function trailingWordStart(text) {
+  let i = text.length;
+  while (i > 0) {
+    const c = text.charCodeAt(i - 1);
+    const isWordChar =
+      (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;
+    if (!isWordChar) break;
+    i--;
+  }
+  return i;
+}
+
+/**
  * Split the text before a cursor into the completed tokens and the partial identifier
  * being typed, if any.
  *
