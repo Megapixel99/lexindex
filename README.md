@@ -16,15 +16,23 @@ The recital rate is how often a four-token context in a held-out file was alread
 npx lexindex /path/to/your/repo --stats
 ```
 
-| your recital | what to expect | the evidence |
+Two different baselines give two different thresholds, and collapsing them into one band was a mistake this table used to make.
+
+**Against your editor's word list**, the advantage holds far lower than expected. It is measured at 35.9% recital (0.583 against 0.194, z=3.74) and at every band above; the only null observed is at **13.5%**.
+
+**Against ten lines of frequency counting**, on real identifiers only, the threshold is much higher: z=3.81 at 61.7% and z=2.90 at 71.2%, and **null at 46.5%, 45.3% and 37.9%**.
+
+| your recital | beats your editor's word list | beats a ten-line frequency table |
 |---|---|---|
-| above 60% | the full claim holds; it beats your editor's word list, and it beats a plain frequency table on real identifiers | z=2.90 at 71.2%, z=3.81 at 61.7% |
-| 40% to 60% | it still beats your editor's word list, though a ten-line frequency table gets you most of the way | z=0.14 at 46.5%, z=0.58 at 45.3%, both null |
-| below 40% | expect little | z=1.62 at 37.9%, null; at 13.5% even the advantage over an ordinary word list was null |
+| above 60% | yes (z=3.18 to 12.65) | yes (z=2.90, z=3.81) |
+| 35% to 60% | yes (z=2.98 to 5.74) | **no, null** (z=0.14, 0.58, 1.62) |
+| around 15% | **no, null** (z=1.00 at 13.5%) | not measured |
 
 That table is the claim. The accuracies quoted further down are large, but completion accuracy is large everywhere; what varies is whether this tool, rather than something considerably simpler, is what earned them.
 
-The tool says which band you are in rather than letting you discover it: `measure` prints the recital rate, and the CLI prints it with every suggestion, with `below ~40%; expect little` attached when it is low.
+The tool says which band you are in rather than letting you discover it: `measure` prints the recital rate, and the CLI prints it with every suggestion.
+
+Note what is **not** measured: how many real repositories fall in each band. Nine corpora were chosen, not sampled, so the fraction of projects this helps is unknown, and two of the strongest rows are admitted artifacts (one was vendored third-party code, and another is a tree of 369 near-identical rule files, which is a property of that tree rather than of the tool).
 
 ## Install
 
@@ -126,9 +134,9 @@ Each was implemented, measured, and rejected in the research this derives from. 
 | right-context or suffix conditioning | the default never moved |
 | degeneracy suppression | filtering repetition removes the best suggestions (0.352 exact against 0.122 overall) |
 | whole-line generation | right about 1 time in 10 mid-line, never past roughly 10 tokens |
-| a bundled pretrained corpus | 57 times the corpus was worth +0.000 in the configuration a user actually runs |
+| a bundled pretrained corpus | 57 times the corpus was worth +0.000 at a warm buffer, +0.016 overall, which is a poor trade either way |
 
-The last is the load-bearing product decision: the only corpus that pays is the one already on your disk.
+The last is the load-bearing product decision: the only corpus that pays is the one already on your disk. Two caveats on that figure, since it is the one most likely to be quoted. The +0.000 is the warm-buffer case; the same measurement gives +0.016 once the buffer empties, and its own write-up calls the thesis bounded rather than absolute. And it was taken in a configuration that included a small transformer, which this package does not have, so it is evidence about the trade rather than a number measured on this architecture.
 
 ## How it works
 

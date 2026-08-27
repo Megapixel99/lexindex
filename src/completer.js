@@ -15,11 +15,16 @@
  *     (0.352 exact vs 0.122 overall)
  *   - whole-line or multi-token generation — right about 1 in 10 mid-line, never past
  *     ~10 tokens
- *   - a bundled pretrained corpus — 57x the corpus was worth +0.000 in the configuration
- *     a user actually runs
+ *   - a bundled pretrained corpus — 57x the corpus was worth +0.000 at a warm buffer and
+ *     +0.016 once the buffer empties, a poor trade either way
  *
  * The last one is the load-bearing product decision: THE ONLY CORPUS THAT PAYS IS THE ONE
- * ALREADY ON THE USER'S DISK.
+ * ALREADY ON THE USER'S DISK. Two caveats on that figure, since it is the one most likely
+ * to be quoted: +0.000 is the warm-buffer case and the same measurement gives +0.016 once
+ * the buffer empties, with its own write-up calling the thesis bounded rather than
+ * absolute; and it was taken with a small transformer present, which this package does not
+ * have, so it is evidence about the trade rather than a number measured on this
+ * architecture.
  */
 
 import { CacheModel } from "./cache-model.js";
