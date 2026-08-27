@@ -20,6 +20,8 @@ import { lex } from "../src/lex.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BIN = path.join(here, "..", "bin", "lexindex.js");
+const MEASURE = path.join(here, "..", "tools", "measure.mjs");
+const REPO = path.join(here, "..");
 
 let dir;
 const FILES = {
@@ -263,5 +265,80 @@ describe("the CLI", () => {
 
   test("no arguments prints usage and exits 2", () => {
     assert.equal(run([]).status, 2);
+  });
+});
+
+/**
+ * The harness is the thing the README tells people to run, and CI gates on it reaching a
+ * verdict. Until now nothing checked that it still does.
+ */
+describe("the measurement harness", () => {
+  function measure(args) {
+    const r = spawnSync(process.execPath, [MEASURE, ...args], { encoding: "utf8" });
+    if (r.error) throw r.error;
+    return { status: r.status, stdout: r.stdout || "", stderr: r.stderr || "" };
+  }
+
+  test("it reaches a verdict on this repository", () => {
+    const r = measure([path.join(REPO, "src"), path.join(REPO, "tools"), path.join(REPO, "test")]);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /RECITAL: [\d.]+%/);
+    assert.match(r.stdout, /COMPLETE : \d+ positions scored/);
+  });
+
+  test("it reports the re-ranking use, or says why it cannot", () => {
+    const r = measure([path.join(REPO, "src"), path.join(REPO, "tools"), path.join(REPO, "test")]);
+    assert.match(r.stdout, /RE-RANKING the list your editor would offer/);
+    // On a corpus this small it should refuse rather than print a number from a handful
+    // of positions. Either outcome is legitimate; silence is not.
+    assert.ok(
+      /CANNOT SUPPORT A NUMBER/.test(r.stdout) || /reordered by this index/.test(r.stdout),
+      "the re-ranking section neither reported nor refused"
+    );
+  });
+
+  test("--json puts one parseable object on stdout and no prose beside it", () => {
+    const r = measure(["--json", path.join(REPO, "src"), path.join(REPO, "tools"), path.join(REPO, "test")]);
+    assert.equal(r.status, 0);
+    const o = JSON.parse(r.stdout); // throws if any human-readable line leaked onto stdout
+    assert.equal(typeof o.recital, "number");
+    assert.ok(o.index.files > 0);
+    assert.ok(o.positions.scored > 0);
+    assert.ok(o.rerank, "the re-ranking measurement is missing from the JSON");
+    assert.ok(
+      typeof o.rerank.refused === "string" || o.rerank.orderings,
+      "the JSON must carry either the re-ranking numbers or the reason there are none"
+    );
+    for (const key of ["arms", "paired", "complete", "corpus"]) assert.ok(key in o, `missing ${key}`);
+  });
+
+  test("the re-ranking exclusions are counted and reported, not buried", () => {
+    const r = measure(["--json", path.join(REPO, "src"), path.join(REPO, "tools"), path.join(REPO, "test")]);
+    const { rerank } = JSON.parse(r.stdout);
+    // A single-candidate list makes every ordering right; leaving those in would inflate
+    // every row equally and the comparison with them.
+    assert.equal(typeof rerank.droppedSingleCandidate, "number");
+    assert.equal(typeof rerank.truthNotInList, "number");
+    assert.equal(
+      rerank.scored + rerank.droppedSingleCandidate + rerank.truthNotInList,
+      rerank.offered,
+      "every position that offered a list must be accounted for"
+    );
+  });
+
+  test("too few files is a refusal, not a number", () => {
+    const thin = fs.mkdtempSync(path.join(os.tmpdir(), "lexindex-thin-"));
+    try {
+      fs.writeFileSync(path.join(thin, "only.js"), "const x = 1;\n");
+      const r = measure([thin]);
+      assert.equal(r.status, 2);
+      assert.match(r.stderr, /GATE:/);
+    } finally {
+      fs.rmSync(thin, { recursive: true, force: true });
+    }
+  });
+
+  test("no arguments is a usage error", () => {
+    assert.equal(measure([]).status, 2);
   });
 });

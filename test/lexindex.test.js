@@ -345,6 +345,34 @@ describe("rerank — re-ordering another engine's candidate list", () => {
     assert.deepEqual(c1, c2);
   });
 
+  // rerankTokens is the whole of rerank after the lexing. The measurement harness calls
+  // it directly, so if the two could disagree the harness would be measuring something
+  // other than what ships.
+  test("rerankTokens is exactly rerank without the lexing step", () => {
+    const m = indexOf("const alpha = 1; ".repeat(8) + "const zeta = 2; alpha(zeta);");
+    for (const text of ["const ", "alpha(", "const alpha = 1; z", "", "a b c "]) {
+      const given = ["zeta", "alpha", "neverSeenHere", "const"];
+
+      const viaText = new Completer(m).rerank(given.slice(), text);
+
+      const c = new Completer(m);
+      const { prev } = splitAtCursor(text);
+      c.setBuffer(prev);
+      const viaTokens = c.rerankTokens(given.slice(), prev);
+
+      assert.deepEqual(viaTokens, viaText, `disagreed at ${JSON.stringify(text)}`);
+    }
+  });
+
+  test("rerankTokens returns a permutation and leaves one or none alone", () => {
+    const m = indexOf("const alpha = 1;");
+    const c = new Completer(m);
+    const given = ["b", "a", "c"];
+    assert.deepEqual([...c.rerankTokens(given, ["const"])].sort(), [...given].sort());
+    assert.deepEqual(c.rerankTokens(["only"], ["const"]), ["only"]);
+    assert.deepEqual(c.rerankTokens([], ["const"]), []);
+  });
+
   // Consistency with suggest(): re-ranking suggest's own top-k must not reorder it.
   test("rerank agrees with suggest on suggest's own candidates", () => {
     const m = indexOf("const alpha = 1; const beta = 2; const gamma = 3; const alpha = 4;");

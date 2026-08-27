@@ -31,6 +31,18 @@ jobs:
         run: |
           node tools/measure.mjs ./src ./tools ./test | tee /tmp/m.txt
           grep -q 'COMPLETE' /tmp/m.txt
+          # The README points people at the re-ranking measurement, so it has to be there
+          # -- either with numbers or with the reason it will not print any.
+          grep -q 'RE-RANKING' /tmp/m.txt
+
+      - name: --json emits one object and no prose beside it
+        run: |
+          node tools/measure.mjs --json ./src ./tools ./test > /tmp/m.json
+          node -e '
+            const o = JSON.parse(require("fs").readFileSync("/tmp/m.json", "utf8"));
+            if (typeof o.recital !== "number") throw new Error("no recital in the JSON");
+            if (!o.rerank) throw new Error("no re-ranking measurement in the JSON");
+          ' 
       - name: the package ships what the README tells people to run
         run: |
           npm pack --dry-run 2>&1 | grep -q 'tools/measure.mjs'
