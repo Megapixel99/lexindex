@@ -1,0 +1,36 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+
+  # The README's central instruction is "run the measurement on your own repo". If the
+  # harness cannot run, that instruction is broken, so CI runs it against this repo. The
+  # numbers are not asserted — the corpus is tiny and any threshold would be noise. What
+  # is asserted is that the harness reaches a verdict rather than crashing or refusing.
+  measure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 24 }
+      - name: the harness runs and reaches a verdict
+        run: |
+          node tools/measure.mjs ./src ./tools ./test | tee /tmp/m.txt
+          grep -q 'COMPLETE' /tmp/m.txt
+      - name: the package ships what the README tells people to run
+        run: |
+          npm pack --dry-run 2>&1 | grep -q 'tools/measure.mjs'

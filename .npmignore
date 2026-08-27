@@ -1,0 +1,16 @@
+# `files` in package.json is the real allow-list and takes precedence over this file
+# when both exist; this is here so the package is still correct if `files` is ever
+# removed. The two must agree: `files` allows src, bin, tools, README.md, LICENSE.
+
+test/
+.github/
+tools/measure.mjs.map
+
+.gitignore
+.npmignore
+eslint.config.js
+package-lock.json
+
+*.log
+out.json
+.DS_Store

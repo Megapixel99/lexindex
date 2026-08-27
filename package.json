@@ -1,0 +1,51 @@
+{
+  "name": "lexindex",
+  "version": "0.0.0",
+  "description": "Per-repo statistical code completion for JavaScript. An n-gram index over your own repo blended with a cache over the current buffer. No model, no network, no dependencies.",
+  "type": "module",
+  "exports": "./src/index.js",
+  "bin": {
+    "lexindex": "./bin/lexindex.js"
+  },
+  "files": [
+    "src",
+    "bin",
+    "tools",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "measure": "node tools/measure.mjs"
+  },
+  "keywords": [
+    "completion",
+    "autocomplete",
+    "code-completion",
+    "ngram",
+    "n-gram",
+    "language-model",
+    "witten-bell",
+    "cache-language-model",
+    "naturalness",
+    "local-first",
+    "offline",
+    "no-llm",
+    "editor",
+    "codemirror",
+    "monaco",
+    "zero-dependency"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Megapixel99/lexindex.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Megapixel99/lexindex/issues"
+  },
+  "homepage": "https://github.com/Megapixel99/lexindex#readme"
+}
