@@ -11,35 +11,23 @@ import fs from "node:fs";
 import path from "node:path";
 import { lex } from "./lex.js";
 import { CountModel } from "./count-model.js";
+import { LANGUAGES, COMMON_SKIP_DIRS, resolveLanguages } from "./languages.js";
 
-const DEFAULT_EXTENSIONS = /\.(js|mjs|cjs|jsx|ts|tsx|mts|cts)$/;
-const DEFAULT_SKIP_DIRS = new Set([
-  "node_modules",
-  ".git",
-  "dist",
-  "build",
-  "coverage",
-  ".next",
-  ".nuxt",
-  "vendor",
-  ".cache",
-  // Not your code, and each one inflates the index with near-duplicates or foreign
-  // idioms. `.claude` holds agent worktrees — whole extra copies of the repository, which
-  // is the most contaminating thing a completion index can eat.
-  ".claude",
-  ".venv",
-  "venv",
-  "site-packages",
-  ".tox",
-  "__pycache__",
-]);
+// The default is the JavaScript family and stays that way: every number this project
+// reports was measured on JavaScript and TypeScript, and a default that quietly widened
+// would change what those numbers describe. Other languages are opt-in through
+// `languages` here, or `--lang` on the CLI and the harness. See src/languages.js.
+const DEFAULT_EXTENSIONS = LANGUAGES.javascript.extensions;
+// Not your code, and each one inflates the index with near-duplicates or foreign idioms.
+const DEFAULT_SKIP_DIRS = new Set(COMMON_SKIP_DIRS);
 const DEFAULT_MAX_BYTES = 400_000;
 
 /** Collect indexable files under `dir`. */
 export function collectFiles(dir, options = {}) {
+  const lang = options.languages ? resolveLanguages(options.languages) : null;
   const {
-    extensions = DEFAULT_EXTENSIONS,
-    skipDirs = DEFAULT_SKIP_DIRS,
+    extensions = lang ? lang.extensions : DEFAULT_EXTENSIONS,
+    skipDirs = lang ? lang.skipDirs : DEFAULT_SKIP_DIRS,
     maxBytes = DEFAULT_MAX_BYTES,
     maxDepth = 24,
   } = options;

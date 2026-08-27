@@ -14,7 +14,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildIndex, updateIndexFile } from "../src/build.js";
+import { buildIndex, updateIndexFile, collectFiles } from "../src/build.js";
+import { resolveLanguages, LANGUAGES, LANGUAGE_NAMES } from "../src/languages.js";
 import { Completer } from "../src/completer.js";
 import { lex } from "../src/lex.js";
 
@@ -340,5 +341,130 @@ describe("the measurement harness", () => {
 
   test("no arguments is a usage error", () => {
     assert.equal(measure([]).status, 2);
+  });
+});
+
+describe("languages", () => {
+  let poly;
+  before(() => {
+    poly = fs.mkdtempSync(path.join(os.tmpdir(), "lexindex-poly-"));
+    fs.writeFileSync(path.join(poly, "a.py"), "def render_widget(widget):\n    return widget.name\n\nrender_widget(None)\n");
+    fs.writeFileSync(path.join(poly, "b.py"), "from a import render_widget\nconfig = load_config()\nrender_widget(config)\n");
+    fs.writeFileSync(path.join(poly, "c.go"), "package main\nfunc RenderWidget(w Widget) string { return w.Name }\n");
+    fs.writeFileSync(path.join(poly, "d.js"), "export function renderWidget(w) { return w.name; }\n");
+    fs.mkdirSync(path.join(poly, "target"));
+    fs.writeFileSync(path.join(poly, "target", "generated.rs"), "fn generated() {}\n");
+    fs.writeFileSync(path.join(poly, "e.rs"), "fn render_widget(w: Widget) -> String { w.name }\n");
+  });
+  after(() => fs.rmSync(poly, { recursive: true, force: true }));
+
+  test("resolveLanguages accepts names, aliases and lists", () => {
+    assert.deepEqual(resolveLanguages("python").languages, ["python"]);
+    assert.deepEqual(resolveLanguages("py").languages, ["python"]);
+    assert.deepEqual(resolveLanguages("ts").languages, ["javascript"]);
+    assert.deepEqual(resolveLanguages("py,go").languages, ["python", "go"]);
+    assert.deepEqual(resolveLanguages(" PY , Go ").languages, ["python", "go"]);
+    assert.deepEqual(resolveLanguages("py,py").languages, ["python"], "duplicates collapse");
+    assert.equal(resolveLanguages("all").languages.length, LANGUAGE_NAMES.length);
+  });
+
+  test("an unknown language names itself and what is on offer", () => {
+    assert.throws(() => resolveLanguages("cobol"), /unknown language "cobol"/);
+    assert.throws(() => resolveLanguages("cobol"), /javascript/);
+    assert.throws(() => resolveLanguages(""), /at least one/);
+  });
+
+  test("each preset matches its own files and not another's", () => {
+    const py = resolveLanguages("python").extensions;
+    for (const f of ["a.py", "a.pyi"]) assert.ok(py.test(f), `python should match ${f}`);
+    for (const f of ["a.js", "a.go", "a.pyx", "a.PY"]) assert.ok(!py.test(f), `python should not match ${f}`);
+
+    const js = resolveLanguages("javascript").extensions;
+    for (const f of ["a.js", "a.mjs", "a.tsx"]) assert.ok(js.test(f));
+    assert.ok(!js.test("a.py"));
+
+    // A joined preset must match both sides, which a naive concatenation gets wrong.
+    const both = resolveLanguages("py,go").extensions;
+    assert.ok(both.test("a.py") && both.test("a.go") && !both.test("a.js"));
+  });
+
+  test("every shipped preset is a usable regular expression", () => {
+    for (const name of LANGUAGE_NAMES) {
+      const { extensions } = resolveLanguages(name);
+      assert.ok(extensions instanceof RegExp, `${name} did not resolve to a RegExp`);
+      assert.ok(LANGUAGES[name].extensions.source.length > 0);
+    }
+  });
+
+  test("the default is still JavaScript, so no measured number moves", () => {
+    const built = buildIndex(poly);
+    assert.equal(built.files, 1, "only d.js should be indexed by default");
+  });
+
+  test("--lang style options reach collectFiles", () => {
+    assert.equal(buildIndex(poly, { languages: "python" }).files, 2);
+    assert.equal(buildIndex(poly, { languages: "py,go" }).files, 3);
+  });
+
+  test("a language's build directory is skipped only for that language", () => {
+    // e.rs is real source; target/generated.rs is build output.
+    assert.equal(buildIndex(poly, { languages: "rust" }).files, 1);
+    assert.ok(resolveLanguages("rust").skipDirs.has("target"));
+    assert.ok(!resolveLanguages("javascript").skipDirs.has("target"), "target is real source elsewhere");
+    // Asking for rust files without the rust preset still finds both.
+    assert.equal(collectFiles(poly, { extensions: /\.rs$/ }).length, 2);
+  });
+
+  test("the CLI indexes another language and completes in it", () => {
+    const stats = run([poly, "--lang", "python", "--stats"]);
+    assert.equal(stats.status, 0);
+    assert.match(stats.stdout, /files\s+: 2 of 2 candidates/);
+
+    const out = run([poly, "--lang", "python", "--stdin", "-k", "5"], "render_wid");
+    assert.equal(out.status, 0);
+    assert.ok(out.stdout.trim().split("\n").includes("render_widget"), out.stdout);
+  });
+
+  test("without --lang the empty-index error points at --lang", () => {
+    const onlyPy = fs.mkdtempSync(path.join(os.tmpdir(), "lexindex-py-"));
+    try {
+      fs.writeFileSync(path.join(onlyPy, "a.py"), "x = 1\n");
+      const r = run([onlyPy, "--stats"]);
+      assert.equal(r.status, 2);
+      assert.match(r.stderr, /--lang/, "the error must say how to index another language");
+    } finally {
+      fs.rmSync(onlyPy, { recursive: true, force: true });
+    }
+  });
+
+  test("the CLI refuses an unknown language", () => {
+    const r = run([poly, "--lang", "cobol", "--stats"]);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /unknown language/);
+  });
+
+  test("--ext still overrides --lang, so an uncovered pattern stays reachable", () => {
+    const r = run([poly, "--lang", "python", "--ext", "\\.go$", "--stats"]);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /files\s+: 1 of 1 candidates/);
+  });
+
+  test("the harness takes --lang, which is how the claim gets checked per language", () => {
+    const r = spawnSync(process.execPath, [MEASURE, "--json", "--lang", "python", poly], { encoding: "utf8" });
+    // Two files is below the harness's own gate, and it must say so rather than answer.
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /GATE:/);
+  });
+
+  test("the harness hints at --lang when the default found nothing", () => {
+    const onlyPy = fs.mkdtempSync(path.join(os.tmpdir(), "lexindex-py2-"));
+    try {
+      for (const n of ["a", "b", "c", "d", "e"]) fs.writeFileSync(path.join(onlyPy, `${n}.py`), `x_${n} = 1\n`);
+      const r = spawnSync(process.execPath, [MEASURE, onlyPy], { encoding: "utf8" });
+      assert.equal(r.status, 2);
+      assert.match(r.stderr, /--lang/);
+    } finally {
+      fs.rmSync(onlyPy, { recursive: true, force: true });
+    }
   });
 });

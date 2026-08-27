@@ -35,6 +35,18 @@ jobs:
           # -- either with numbers or with the reason it will not print any.
           grep -q 'RE-RANKING' /tmp/m.txt
 
+      # The lexer never cared what language it read; the defaults did. This asserts the
+      # default is still JavaScript-only, so no number in the README quietly changes.
+      - name: the default corpus is still the JavaScript family
+        run: |
+          mkdir -p /tmp/langcheck
+          printf 'x = 1\n' > /tmp/langcheck/a.py
+          if node bin/lexindex.js /tmp/langcheck --stats; then
+            echo "::error::a Python-only tree was indexed by default; the default widened"
+            exit 1
+          fi
+          node bin/lexindex.js /tmp/langcheck --lang python --stats | grep -q 'files    : 1'
+
       - name: --json emits one object and no prose beside it
         run: |
           node tools/measure.mjs --json ./src ./tools ./test > /tmp/m.json

@@ -16,6 +16,7 @@ import { buildIndex } from "../src/build.js";
 import { Completer } from "../src/completer.js";
 import { lex } from "../src/lex.js";
 import { recitalBand as band } from "../src/count-model.js";
+import { resolveLanguages, LANGUAGE_NAMES } from "../src/languages.js";
 
 const argv = process.argv.slice(2);
 const dirs = [];
@@ -29,6 +30,7 @@ let recitalOf = null;
 let extRe = null;
 let excludeRe = null;
 let maxBytes = null;
+let langSpec = null;
 
 function usage() {
   console.log(`usage: lexindex <dir>... [options]
@@ -45,14 +47,18 @@ function usage() {
     --recital <file>              just the recital rate of <file> against the index
   index
     --beta <n>                    0 repo only, 1 buffer only, default 0.5
-    --ext <regex>                 which filenames to index (default js/ts family)
+    --lang <names>                index another language: python, go, rust, java,
+                                  ruby, c, cpp, csharp, php, swift, kotlin, shell,
+                                  sql, or "all". Comma-separated. Default javascript.
+    --ext <regex>                 which filenames to index (overrides --lang)
     --exclude <regex>             drop matching paths from the corpus
     --max-bytes <n>               skip files larger than this (default 400000)
 
 examples
     lexindex ./src --stats
     lexindex ./src --at src/server.js:120:9 -k 5
-    sed -n '1,120p' src/server.js | lexindex ./src --stdin --json`);
+    sed -n '1,120p' src/server.js | lexindex ./src --stdin --json
+    lexindex ./service --lang python --stats`);
 }
 
 /** Read a flag's value, refusing to silently swallow the next flag as an argument. */
@@ -75,6 +81,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "-k") k = Number(value(a, i++));
   else if (a === "--beta") beta = Number(value(a, i++));
   else if (a === "--ext") extRe = value(a, i++);
+  else if (a === "--lang") langSpec = value(a, i++);
   else if (a === "--exclude") excludeRe = value(a, i++);
   else if (a === "--max-bytes") maxBytes = Number(value(a, i++));
   else if (a === "--recital") recitalOf = value(a, i++);
@@ -100,6 +107,17 @@ if (maxBytes !== null && (!Number.isFinite(maxBytes) || maxBytes < 1)) {
 }
 
 const buildOpts = {};
+if (langSpec !== null) {
+  try {
+    const resolved = resolveLanguages(langSpec);
+    buildOpts.extensions = resolved.extensions;
+    buildOpts.skipDirs = resolved.skipDirs;
+  } catch (e) {
+    fail(e.message);
+  }
+}
+// --ext is the escape hatch and wins, so a pattern the presets do not cover is always
+// reachable without waiting for a preset to exist.
 if (extRe !== null) {
   try {
     buildOpts.extensions = new RegExp(extRe);
@@ -121,7 +139,14 @@ if (maxBytes !== null) buildOpts.maxBytes = maxBytes;
 const built = buildIndex(dirs, buildOpts);
 if (built.files === 0) {
   console.error("lexindex: indexed 0 files — nothing to complete from.");
-  console.error("          check the path, or that it holds .js/.ts files outside node_modules.");
+  console.error(
+    langSpec === null
+      ? "          check the path, or that it holds .js/.ts files outside node_modules."
+      : `          check the path, or that it holds ${langSpec} files outside the skipped directories.`
+  );
+  if (langSpec === null && extRe === null) {
+    console.error(`          for another language: --lang <${LANGUAGE_NAMES.slice(0, 6).join("|")}|...>`);
+  }
   if (excludeRe !== null || extRe !== null) {
     console.error(`          ${built.candidates} files were found and then filtered out by --ext/--exclude.`);
   }

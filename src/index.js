@@ -16,3 +16,4 @@ export { CacheModel } from "./cache-model.js";
 export { Completer } from "./completer.js";
 export { BufferSession } from "./session.js";
 export { buildIndex, updateIndexFile, collectFiles } from "./build.js";
+export { LANGUAGES, LANGUAGE_NAMES, resolveLanguages } from "./languages.js";
