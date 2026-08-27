@@ -468,3 +468,142 @@ describe("languages", () => {
     }
   });
 });
+
+/**
+ * Several directories are one corpus, and a file reachable twice is still one file.
+ *
+ * This is not tidiness. Duplicated content repeats itself perfectly, repetition is exactly
+ * what the index measures, and a corpus counted twice reports a recital rate describing
+ * the counting rather than the code — the same defect the README spends a numbered point
+ * on, reached through the tool's own documented interface rather than through a vendored
+ * directory.
+ */
+describe("overlapping paths are one corpus", () => {
+  let root;
+  before(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "lexindex-dup-"));
+    fs.mkdirSync(path.join(root, "lib"));
+    for (let i = 0; i < 6; i++) {
+      fs.writeFileSync(path.join(root, `f${i}.js`), `export const symbol${i} = ${i};\nexport function helper${i}(a) { return a + ${i}; }\n`);
+    }
+    for (let i = 0; i < 3; i++) {
+      fs.writeFileSync(path.join(root, "lib", `g${i}.js`), `export const libSymbol${i} = ${i};\n`);
+    }
+  });
+  after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  test("a directory named twice yields each file once", () => {
+    const once = collectFiles(root);
+    const twice = collectFiles([root, root]);
+    assert.equal(twice.length, once.length);
+    assert.equal(twice.duplicates, once.length);
+    assert.equal(once.duplicates, 0);
+  });
+
+  // `./src` and `./src/` are the same directory and different strings. This is the one a
+  // person types without noticing.
+  test("a trailing slash is the same directory", () => {
+    const plain = collectFiles(root);
+    const slashed = collectFiles([root, root + path.sep]);
+    assert.equal(slashed.length, plain.length);
+    assert.equal(slashed.duplicates, plain.length);
+  });
+
+  test("a parent and its own child overlap", () => {
+    const parent = collectFiles(root);
+    const both = collectFiles([root, path.join(root, "lib")]);
+    assert.equal(both.length, parent.length, "the child's files are already under the parent");
+    assert.equal(both.duplicates, 3);
+  });
+
+  // The reason the key is the REAL path and not `path.resolve`. This is not hypothetical:
+  // on macOS the temp directory is itself reached through a symlink, so the two spellings
+  // below are the same directory that `path.resolve` calls different — and any repository
+  // under a symlinked home, mount or checkout has the same shape.
+  test("two spellings of one directory through a symlink are the same directory", () => {
+    const real = fs.realpathSync(root);
+    if (real === root) return; // no symlink in the way on this platform; nothing to prove
+    assert.notEqual(path.resolve(root), path.resolve(real), "the fixture is not exercising this");
+
+    const both = collectFiles([root, real]);
+    assert.equal(both.length, collectFiles(root).length);
+    assert.equal(both.duplicates, collectFiles(root).length, "resolve() alone would have missed this");
+  });
+
+  // Documenting what the walker actually does, because the dedup above only matters if
+  // you know what does and does not reach it.
+  test("a symlinked file is not followed at all, so it cannot duplicate its target", () => {
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "lexindex-link-"));
+    try {
+      fs.symlinkSync(path.join(root, "f0.js"), path.join(other, "linked.js"));
+    } catch {
+      fs.rmSync(other, { recursive: true, force: true });
+      return; // a platform without symlink permission
+    }
+    try {
+      assert.equal(collectFiles(other).length, 0, "readdir reports a symlink as neither file nor directory");
+      assert.equal(collectFiles([root, other]).length, collectFiles(root).length);
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  test("the duplicate count does not leak into the list itself", () => {
+    const files = collectFiles([root, root]);
+    // Existing callers spread, iterate and serialise this; none of that may change.
+    assert.equal([...files].length, files.length);
+    assert.equal(JSON.parse(JSON.stringify(files)).length, files.length);
+    assert.ok(!Object.keys(files).includes("duplicates"));
+    for (const f of files) assert.equal(typeof f, "string");
+  });
+
+  test("a single directory as a plain string still works", () => {
+    assert.ok(Array.isArray(collectFiles(root)));
+    assert.equal(collectFiles(root).length, 9);
+  });
+
+  // The point of the whole exercise: the corpus, and so every number taken from it, must
+  // not move because of how the same tree was spelled on the command line.
+  test("the index is identical however the same tree is spelled", () => {
+    const honest = buildIndex(root);
+    for (const spelling of [[root, root], [root, root + path.sep], [root, path.join(root, "lib")]]) {
+      const b = buildIndex(spelling);
+      assert.equal(b.files, honest.files, `files moved for ${JSON.stringify(spelling)}`);
+      assert.equal(b.tokens, honest.tokens, `tokens moved for ${JSON.stringify(spelling)}`);
+      assert.ok(b.duplicates > 0, "the overlap should have been noticed");
+    }
+    assert.equal(buildIndex(root).duplicates, 0);
+  });
+
+  test("the recital rate does not move either, which is the number that matters", () => {
+    const honest = buildIndex(root);
+    const doubled = buildIndex([root, root]);
+    const held = lex(fs.readFileSync(path.join(root, "f0.js"), "utf8"));
+    assert.equal(doubled.index.recitalRate(held), honest.index.recitalRate(held));
+  });
+
+  test("the CLI says when paths overlapped rather than quietly deduplicating", () => {
+    const r = run([root, root + path.sep, "--stats"]);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /files\s+: 9 of 9 candidates/);
+    assert.match(r.stderr, /reachable through more than one of the paths/);
+    assert.ok(!run([root, "--stats"]).stderr.includes("reachable through"), "no note when there is nothing to note");
+  });
+
+  test("the harness says so too, because it is about to print numbers", () => {
+    const r = spawnSync(process.execPath, [MEASURE, root, root + path.sep], { encoding: "utf8" });
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /NOTE: 9 files were reachable through more than one/);
+    assert.match(r.stdout, /inflate every number below/);
+  });
+
+  test("the harness reports the same corpus however it is spelled", () => {
+    const readJson = (dirs) =>
+      JSON.parse(spawnSync(process.execPath, [MEASURE, "--json", ...dirs], { encoding: "utf8" }).stdout);
+    const honest = readJson([root]);
+    const doubled = readJson([root, root]);
+    assert.equal(doubled.index.files, honest.index.files);
+    assert.equal(doubled.recital, honest.recital, "recital must not move with the argument list");
+    assert.equal(doubled.positions.scored, honest.positions.scored);
+  });
+});

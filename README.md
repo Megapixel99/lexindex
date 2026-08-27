@@ -86,6 +86,8 @@ Across nine corpora the hybrid beat the word-based baseline in eight, with paire
 
 Several directories are treated as one corpus, matching `buildIndex`. Measuring them separately splits a repository into underpowered samples; on a repository whose JavaScript lives in three folders, that was the difference between three nulls (z=1.13, 0.58, 1.63) and one answer (z=5.74).
 
+One corpus also means a file reachable through two of those paths is one file. That is the same concern as point 3 below rather than a separate one, and it arrives through this very argument list: `./src ./src/` is two spellings of one directory, a parent and a child overlap, and on a machine whose checkout sits under a symlink two absolute paths can be the same place. Counted twice, this repository's own recital went from 51.0% to 74.0% and its identifier accuracy from 34.6% to 83.3% — a different verdict entirely, from an argument list nobody would look at twice. Files are keyed on their real path so this cannot happen, and both the CLI and the harness say when paths overlapped rather than quietly deduplicating.
+
 ```sh
 node node_modules/lexindex/tools/measure.mjs ./src ./scripts ./tools   # one index, one result
 ```
@@ -219,7 +221,8 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 
 | | |
 |---|---|
-| `buildIndex(dirs, opts)` | `{ index, files, tokens, ms, candidates, skipped, tokensByFile }` |
+| `buildIndex(dirs, opts)` | `{ index, files, tokens, ms, candidates, skipped, duplicates, tokensByFile }` |
+| `collectFiles(dirs, opts)` | one directory or several as one corpus; deduplicated by real path, with `.duplicates` |
 | `new Completer(index, { cacheBeta })` | `cacheBeta` 0 is repo only, 1 is buffer only, default 0.5 |
 | `completer.complete(textBeforeCursor, { k })` | lexes, finds the partial identifier, updates the buffer |
 | `completer.completeScored(...)`, `.suggestScored(...)` | the same rankings, each with the score that produced it |

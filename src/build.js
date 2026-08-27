@@ -22,7 +22,24 @@ const DEFAULT_EXTENSIONS = LANGUAGES.javascript.extensions;
 const DEFAULT_SKIP_DIRS = new Set(COMMON_SKIP_DIRS);
 const DEFAULT_MAX_BYTES = 400_000;
 
-/** Collect indexable files under `dir`. */
+/**
+ * Collect indexable files under `dir`, or under each of several directories.
+ *
+ * Several directories are ONE corpus, and a file reachable twice is still one file. That
+ * is not tidiness, it is the whole subject of this project: duplicated content repeats
+ * itself perfectly, repetition is exactly what the index measures, and a corpus counted
+ * twice reports a recital rate that describes the counting rather than the code. On this
+ * repository, passing `./src` alongside its own parent took recital from 51.0% to 74.0%
+ * and identifier accuracy from 34.6% to 83.3% — a completely different verdict, from an
+ * argument list a person would type without a second thought.
+ *
+ * The spellings that reach here are not comparable as strings: `./src` and `./src/` are
+ * the same directory, a parent and a child overlap, and a symlink can be a third name for
+ * either. So files are keyed on the real path, and the first spelling seen is the one
+ * returned.
+ *
+ * @param {string|string[]} dir one directory, or several treated as one corpus
+ */
 export function collectFiles(dir, options = {}) {
   const lang = options.languages ? resolveLanguages(options.languages) : null;
   const {
@@ -32,8 +49,28 @@ export function collectFiles(dir, options = {}) {
     maxDepth = 24,
   } = options;
 
+  const roots = Array.isArray(dir) ? dir : [dir];
   const out = [];
-  (function walk(d, depth) {
+  const seen = new Map(); // real path -> the spelling that got there first
+  let duplicates = 0;
+
+  const identity = (p) => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+
+  (function walkAll() {
+    for (const root of roots) walk(root, 0);
+  })();
+  // Non-enumerable so that spreading, iterating or serialising the list behaves exactly
+  // as it did before this counter existed; it is metadata about the walk, not a file.
+  Object.defineProperty(out, "duplicates", { value: duplicates, enumerable: false });
+  return out;
+
+  function walk(d, depth) {
     if (depth > maxDepth) return;
     let entries;
     try {
@@ -52,11 +89,17 @@ export function collectFiles(dir, options = {}) {
         } catch {
           continue;
         }
-        if (size <= maxBytes) out.push(p);
+        if (size > maxBytes) continue;
+        const key = identity(p);
+        if (seen.has(key)) {
+          duplicates++;
+          continue;
+        }
+        seen.set(key, p);
+        out.push(p);
       }
     }
-  })(dir, 0);
-  return out;
+  }
 }
 
 /**
@@ -68,7 +111,7 @@ export function collectFiles(dir, options = {}) {
  * long-lived editor process does.
  *
  * @returns {{index: CountModel, files: number, tokens: number, ms: number, skipped: number,
- *   candidates: number, tokensByFile: Map<string, string[]>|null}}
+ *   candidates: number, duplicates: number, tokensByFile: Map<string, string[]>|null}}
  */
 export function buildIndex(dirs, options = {}) {
   const { order = 5, exclude = null, retainFileTokens = false } = options;
@@ -80,25 +123,25 @@ export function buildIndex(dirs, options = {}) {
   let candidates = 0;
   let skipped = 0;
 
-  for (const root of roots) {
-    for (const file of collectFiles(root, options)) {
-      candidates++;
-      if (exclude && exclude(file)) {
-        skipped++;
-        continue;
-      }
-      let text;
-      try {
-        text = fs.readFileSync(file, "utf8");
-      } catch {
-        skipped++;
-        continue;
-      }
-      const tokens = lex(text);
-      if (tokens.length) {
-        model.addFileTokens(tokens);
-        if (tokensByFile) tokensByFile.set(path.resolve(file), tokens);
-      }
+  // One call for every root, so a file reachable through two of them is counted once.
+  const files = collectFiles(roots, options);
+  for (const file of files) {
+    candidates++;
+    if (exclude && exclude(file)) {
+      skipped++;
+      continue;
+    }
+    let text;
+    try {
+      text = fs.readFileSync(file, "utf8");
+    } catch {
+      skipped++;
+      continue;
+    }
+    const tokens = lex(text);
+    if (tokens.length) {
+      model.addFileTokens(tokens);
+      if (tokensByFile) tokensByFile.set(path.resolve(file), tokens);
     }
   }
 
@@ -110,6 +153,7 @@ export function buildIndex(dirs, options = {}) {
     tokens: model.nTokens,
     skipped,
     candidates,
+    duplicates: files.duplicates,
     tokensByFile,
     ms: Date.now() - started,
   };

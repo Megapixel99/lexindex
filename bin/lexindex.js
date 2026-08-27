@@ -157,6 +157,7 @@ const indexReport = {
   files: built.files,
   candidates: built.candidates,
   skipped: built.skipped,
+  duplicates: built.duplicates,
   tokens: built.tokens,
   vocab: built.index.uni.size,
   ms: built.ms,
@@ -192,6 +193,14 @@ if (stats || (!at && !useStdin)) {
     console.log(`vocab    : ${built.index.uni.size.toLocaleString()} distinct tokens`);
     console.log(`built in : ${built.ms} ms`);
     console.log(`COMPLETE : ${built.files + built.skipped} of ${built.candidates} accounted for`);
+  }
+  if (built.duplicates > 0) {
+    // Counted once, and said out loud. Overlapping paths inflate the recital rate, which
+    // is the number this whole tool asks people to trust.
+    console.error(
+      `lexindex: ${built.duplicates} file${built.duplicates === 1 ? "" : "s"} were reachable ` +
+        `through more than one of the paths given, and were indexed once.`
+    );
   }
   if (!at && !useStdin) process.exit(0);
 }
