@@ -67,6 +67,30 @@ describe("collectFiles / buildIndex", () => {
     assert.ok(built.tokens > 0);
   });
 
+  // A size ceiling that stopped applying would pull minified bundles, vendored blobs and
+  // generated dumps into the corpus, and each of those repeats itself far harder than
+  // handwritten code does — which is the one thing the recital rate measures.
+  test("a file past the size ceiling is not a candidate", () => {
+    const big = fs.mkdtempSync(path.join(os.tmpdir(), "lexindex-big-"));
+    try {
+      fs.writeFileSync(path.join(big, "small.js"), "const smallThing = 1;\n");
+      // Comfortably over the 400_000-byte default, so the default is pinned too.
+      fs.writeFileSync(path.join(big, "huge.js"), "const filler = 1;\n".repeat(30_000));
+
+      assert.deepEqual(
+        collectFiles(big).map((f) => path.basename(f)),
+        ["small.js"],
+        "the default ceiling keeps the oversized file out"
+      );
+      // And the option moves the ceiling rather than being decorative: at 10 bytes even
+      // the small file is too big.
+      assert.deepEqual(collectFiles(big, { maxBytes: 10 }).map((f) => path.basename(f)), []);
+      assert.equal(buildIndex(big).candidates, 1);
+    } finally {
+      fs.rmSync(big, { recursive: true, force: true });
+    }
+  });
+
   test("--exclude style predicates drop files from the corpus", () => {
     const built = buildIndex(dir, { exclude: (f) => f.endsWith("gamma.js") });
     assert.equal(built.files, 2);
@@ -120,19 +144,54 @@ describe("updateIndexFile — a long-lived process keeping up with edits", () =>
     assert.equal(updateIndexFile(built, fresh, null).action, "unchanged", "removing it twice is not an error");
   });
 
+  // A file emptied in the editor holds no tokens, and an index cannot hold a file that
+  // contributes nothing: it would be a phantom in the file count and a retained empty
+  // token array that the next update would subtract as if it were real content. The
+  // action a watcher sees has to say so, and has to keep saying so.
+  test("emptying a file is a removal, not an edit that leaves a husk behind", () => {
+    const built = buildIndex(dir, { retainFileTokens: true });
+    const target = path.join(dir, "zeta.js");
+    try {
+      assert.equal(updateIndexFile(built, target, "export const zetaThing = 1;").action, "added");
+      assert.equal(built.files, 4);
+
+      assert.equal(updateIndexFile(built, target, "").action, "removed");
+      assert.equal(built.files, 3);
+      assert.equal(
+        built.tokensByFile.get(path.resolve(target)),
+        undefined,
+        "nothing retained for a file with nothing in it"
+      );
+      assert.equal(
+        updateIndexFile(built, target, "  \n").action,
+        "unchanged",
+        "still empty is still nothing, not another edit"
+      );
+      assert.equal(built.files, 3);
+    } finally {
+      fs.rmSync(target, { force: true });
+    }
+  });
+
   test("an index kept current by updates matches one built from the same tree", () => {
     const built = buildIndex(dir, { retainFileTokens: true });
     const extra = path.join(dir, "epsilon.js");
     fs.writeFileSync(extra, "export function renderChart(series) { return series.length; }\n");
     try {
+      // Query BEFORE the update, as a long-lived process necessarily has. The index
+      // memoises context totals on first use, and a memo that outlived the counts it
+      // summarised would only ever show up on this ordering.
+      const scored = (m) =>
+        new Completer(m, { cacheBeta: 0 }).suggestScored(["export", "function"], { k: 5 });
+      scored(built.index);
+
       updateIndexFile(built, extra);
       const scratch = buildIndex(dir);
       assert.equal(built.index.nTokens, scratch.index.nTokens);
       assert.equal(built.index.nFiles, scratch.index.nFiles);
-      assert.deepEqual(
-        new Completer(built.index, { cacheBeta: 0 }).suggest(["export", "function"], { k: 5 }),
-        new Completer(scratch.index, { cacheBeta: 0 }).suggest(["export", "function"], { k: 5 })
-      );
+      // The scores and not just the names: a stale total rescales a whole context at
+      // once, which reorders nothing and so leaves the top-five list looking right.
+      assert.deepEqual(scored(built.index), scored(scratch.index));
     } finally {
       fs.rmSync(extra, { force: true });
     }

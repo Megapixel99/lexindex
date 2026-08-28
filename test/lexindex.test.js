@@ -76,6 +76,14 @@ describe("CountModel", () => {
     const m = indexOf(src);
     assert.equal(m.recitalRate(lex(src)), 1);
     assert.ok(m.recitalRate(lex("zzz qqq www vvv uuu ttt")) < 0.5);
+
+    // A rate is a fraction, and "1" and "low" pin neither half of it: both survive an
+    // index that scored one position fewer than it should. Text that half recites the
+    // corpus scores exactly half. With a context length of 4 these eight tokens hold
+    // four scoreable positions, and the index has seen the contexts of the first two.
+    const half = lex("const alpha = 1 ; zzz qqq www");
+    assert.equal(half.length, 8, "four scoreable positions at a context length of 4");
+    assert.equal(m.recitalRate(half), 0.5);
   });
 });
 
@@ -196,6 +204,28 @@ describe("CountModel — keeping an index current without rebuilding it", () => 
     const out = new Completer(m, { cacheBeta: 0 }).suggest(["const"], { k: 5 });
     assert.ok(out.includes("omegaValue"), `got ${JSON.stringify(out)}`);
     assert.ok(!out.includes("alpha"), "the old name is gone from the corpus, so it must be gone from the index");
+  });
+
+  // `dump` above compares the count tables, and the tables are not the whole model.
+  // finalize() also rebuilds ctxTotals, a memo of how many times each context was seen,
+  // and dropping that memo is the cache invalidation for the counts that just changed.
+  // A memo entry only exists once a predict() has walked that context, so an update
+  // applied to a model nobody has queried yet cannot expose a stale one — which is why
+  // every test above misses it. This asks first, then updates, then asks again.
+  //
+  // The comparison has to be the scores themselves. A stale total rescales every score
+  // under that context without changing which tokens are present, so "the new name is
+  // there and the old one is gone" passes against a model that is quietly wrong.
+  test("a prediction made before an update does not leave a stale context total behind", () => {
+    const edited = "const gamma = 99; const delta = 4; export function sprint() { return gamma + delta; }";
+    const ordered = (m) => [...m.predict(["const"])].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+
+    const live = indexOf(A, B, C);
+    ordered(live); // memoises how often "const" had been seen at the OLD counts
+    live.replaceFileTokens(lex(C), lex(edited));
+
+    // The edit moves that total from three occurrences of "const" to four.
+    assert.deepEqual(ordered(live), ordered(indexOf(A, B, edited)));
   });
 
   test("adding or removing after finalize is an error until reopen() says otherwise", () => {
