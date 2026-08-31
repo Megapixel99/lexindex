@@ -115,6 +115,13 @@ export class CountModel {
       if (c <= 1) uni.delete(w);
       else uni.set(w, c - 1);
     }
+    // The same rule the context tables follow, applied to the unigram table: an empty
+    // count map is deleted rather than left behind. `_unigrams()` creates this entry on
+    // demand, so removing the last file used to leave `tabs[0]` holding an empty map where
+    // a fresh model has nothing -- an index emptied by subtraction was then not quite
+    // equal to a rebuilt one, which is the property this class claims. Nothing predicted
+    // differently for it, which is exactly why it would have gone on being true.
+    if (uni.size === 0) this.tabs[0].delete("");
 
     const n = tokens.length;
     for (let t = 1; t < n; t++) {

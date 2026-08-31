@@ -247,6 +247,23 @@ describe("CountModel — keeping an index current without rebuilding it", () => 
     assert.ok(m.nTokens >= 0 && m.nFiles >= 0);
     assert.ok(before.length > 0);
   });
+
+  test("an index emptied by subtraction is equal to one that was never filled", () => {
+    // The claim this class makes is that an updated index IS a rebuilt one, and the whole
+    // way down to empty is part of "the whole way". `_unigrams()` creates the tabs[0]
+    // entry on demand, so removing the last file left an empty count map behind where a
+    // fresh model has nothing -- invisible in every prediction, and still a table that
+    // did not match. Reachable from updateIndexFile(built, lastFile, null).
+    const m = indexOf(A);
+    m.reopen();
+    m.removeFileTokens(lex(A));
+    m.finalize();
+
+    assert.equal(dump(m), dump(new CountModel(5).finalize()));
+    for (const tab of m.tabs) for (const counts of tab.values()) assert.ok(counts.size > 0);
+    assert.equal(m.nTokens, 0);
+    assert.equal(m.nFiles, 0);
+  });
 });
 
 describe("scores", () => {
