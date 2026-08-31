@@ -21,7 +21,8 @@
  * `DocumentSet` contributes nothing.
  */
 
-import { splitAtCursor, isWord } from "./lex.js";
+import { splitAtCursor } from "./lex.js";
+import { topWords } from "./identifiers.js";
 
 /**
  * Build a CodeMirror 6 `CompletionSource` over an open-document set.
@@ -51,11 +52,9 @@ export function completionSource(docs, { k = 5, cacheBeta = 0.5, minPrefix = 1 }
       return null;
     }
 
-    const scored = session.completeScored(before, { k });
-    // Identifier-shaped only, matching the language server's decision for the same reason:
-    // the measurements score punctuation because a fair benchmark has to, but a popup
-    // offering `;` is noise.
-    const words = scored.filter((e) => isWord(e.token));
+    // Identifier-shaped only, and asked for wide enough to still return `k` of them when
+    // punctuation ranks highly -- see identifiers.js.
+    const words = topWords(session, before, k);
     if (words.length === 0) return null;
 
     return {
