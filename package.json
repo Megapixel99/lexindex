@@ -1,6 +1,6 @@
 {
   "name": "lexindex",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Per-repo statistical code completion for JavaScript. An n-gram index over your own repo blended with a cache over the current buffer. No model, no network, no dependencies.",
   "type": "module",
   "exports": {
