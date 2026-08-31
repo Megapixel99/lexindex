@@ -144,9 +144,93 @@ Two exclusions carry weight and are printed rather than buried. A list holding o
 
 The run above is a null, on a corpus chosen for being small. That is the harness working. The table at the top of this README says plainly that there are recital ranges where this tool is expected to lose to one baseline or the other, and a harness that could not report that would not be worth shipping — which is also why it refuses outright rather than printing a number when too few positions survive the exclusions.
 
+## Where no language server runs
+
+The first entry in *What it cannot do* names this tool's place — CodeMirror and Monaco embeddings, plain-JavaScript projects — and until now that was the one claim in this README with nothing measured under it. A browser page has no file walker and no repository. The only text it can index is the documents the user currently has open, so the question is not what a repository's recital rate is; it is a sweep. At 1 open document, 3, 8, 30, is there anything here the editor does not already give away?
+
+```sh
+node node_modules/lexindex/tools/opendocs.mjs ./src
+node node_modules/lexindex/tools/opendocs.mjs --tabs sibling --sweep 1,3,8 ./src
+```
+
+Ghost 5.57.2's `core`, 1,068 files, on 2,180 held-out identifier positions fixed once so that every row is scored on the same cursors and the only thing changing down a column is how many documents were open. `open` counts the documents open *besides* the one being edited, so the first row is an editor holding two tabs:
+
+```
+  open    tokens  recital  lexindex  buf only   cur doc  all open  z vs cur  z vs all  z vs buf
+     1       416    23.9%     50.5%     35.2%     27.7%     34.0%    18.51    16.50    15.54
+     2       847    30.6%     53.7%     35.2%     27.7%     32.8%    20.11    19.13    17.33
+     3     1,318    35.5%     56.2%     35.2%     27.7%     32.3%    21.39    20.97    18.64
+     5     2,127    40.2%     58.3%     35.2%     27.7%     32.2%    22.48    21.98    19.90
+     8     3,428    45.5%     61.0%     35.2%     27.7%     32.6%    23.81    23.29    21.30
+    12     5,065    47.6%     61.4%     35.2%     27.7%     32.0%    23.91    23.74    21.41
+    20     8,528    52.2%     63.7%     35.2%     27.7%     31.7%    24.89    24.66    22.47
+    30    12,778    55.2%     64.9%     35.2%     27.7%     32.4%    25.36    24.97    23.06
+    50    19,740    58.7%     65.9%     35.2%     27.7%     32.4%    25.90    25.17    23.55
+```
+
+**The column that decides this is the last one, and it is not the obvious one.** Against both word-list baselines the hybrid wins from a single open document on every corpus measured — and that sentence is a trap, because the hybrid is half cache and the cache reads only the document being edited. It wins with one other document open whether or not opening any other document is worth anything, so it would talk somebody into building a tab indexer that earns nothing. `buf only` is the ablation that separates the two: the cache alone over an *empty* index, with no open documents indexed at all. `z vs buf` is the only column that says whether reading the other tabs pays.
+
+Two answers come out of that, and they are different products.
+
+**With one document open, the cache alone is the whole result.** 35.2% against the editor's 27.7% on Ghost (z=9.01) and 30.0% against 21.7% on llocal (z=4.24), with nothing else indexed at all. That is the embedding which has no document set to speak of — a docs page, an admin console's query box, a config editor — and it is served without a `CountModel`, an open-document list, or anything to keep current.
+
+**Reading the other open documents pays from the first one.** Not the thirtieth. Of the six corpus-and-tab-set combinations measured, four are already significant with a single other document open, and the two that are not (z=1.47 and z=1.86) clear it at two. Nothing narrows back to a null further along the sweep.
+
+| corpus | files | positions | boilerplate | cache alone vs the editor's word list | other documents before they pay |
+|---|---|---|---|---|---|
+| Ghost 5.57.2 `core` | 1,068 | 2,180 | 5.7% | 35.2% vs 27.7% (z=9.01) | 1, either tab set |
+| llocal | 216 | 516 | 3.9% | 30.0% vs 21.7% (z=4.24) | 1 sibling, 2 sampled from anywhere |
+| k8s | 153 | 255 | 2.4% | 47.1% vs 36.9% (z=3.36) | 1 sampled from anywhere, 2 sibling |
+
+Which documents are open is not a neutral choice, so both ends run. `--tabs random` samples them from anywhere in the corpus, which nobody does; `--tabs sibling` takes the files nearest by path, which is closer to a real tab set and optimistic in exactly the direction point 3 below is about. The truth for a given user is between them. Read k8s as the optimistic end for a second reason: no single header runs through it, but 42.7% of its scored positions share a context with a quarter of the corpus, which is what a tree of near-identical route and object modules looks like from inside.
+
+### This sweep is more exposed to corpus choice, not less
+
+Its whole subject is how much a few open documents already know about the one being edited, so a corpus where every file opens with the same header answers with the header. Canvas LMS's `app` tree reports 56.7% recital and 72.0% accuracy from **one** open document of 961 tokens, which is not a result — 43.4% of its scored positions sit on a four-token context that more than half of all other files also carry, and that context is the 16-line license notice at the top of every file. So the harness measures that share and prints it, on the same posture as the generated-code check: count it and say so.
+
+```
+BOILERPLATE: 43.4% of those positions sit on a context that more than half the other files also carry
+             (46.2% at a quarter of them). That is a license header or a generated
+             preamble, and it is what this sweep will mostly be measuring.
+```
+
+Nothing is excluded on the strength of it. The first corpus tried here failed the same gate for a different reason — a Cordova app carrying four byte-identical copies of `cordova.js` — and both are point 3 below arriving through the front door rather than a new hazard.
+
+### What that makes a browser build
+
+Not much, which is the point. Nothing under `src/` reaches for a file system except `build.js`, and a page has no use for it: `CountModel` already takes token arrays, and `addFileTokens`, `replaceFileTokens` and `finalize` are exactly the API an open-document set needs.
+
+```js
+import { lex, CountModel, Completer } from "lexindex";
+
+const index = new CountModel(5);
+const tokens = new Map();
+for (const [name, text] of openDocuments) {
+  const t = lex(text);
+  tokens.set(name, t);
+  index.addFileTokens(t);
+}
+index.finalize();
+
+const session = new Completer(index).session();
+session.complete(textBeforeCursor);                  // per keystroke
+
+index.replaceFileTokens(tokens.get("b.js"), null);   // a tab closes
+```
+
+The one-document embedding skips all of it. An empty index with `cacheBeta: 1` is the row that needs no document set:
+
+```js
+const cacheOnly = new Completer(new CountModel(5).finalize(), { cacheBeta: 1 });
+```
+
+What stands in the way is packaging rather than mechanism, and it should be said rather than discovered: `src/index.js` is this package's only export and it re-exports `buildIndex`, so a bundler following that entry pulls `node:fs` into a page that never calls it. That is a second export path, not a rewrite.
+
+And the rule that governs all of this is point 5 below and the last row of *Seven things it deliberately does not do*, both unchanged. The index has to be built from the documents the user has open, in their browser. A prebuilt one shipped with the page was measured at 57 times the corpus for +0.000, while the second document somebody actually has open is worth z=4.63.
+
 ## What it cannot do
 
-1. **It is not type-aware.** It has no idea what is in scope or which members exist on an object, and standing alone at a `foo.` position a language server beats it outright. Its place is where no language server runs (CodeMirror and Monaco embeddings, plain-JavaScript projects, `cmp-buffer`-style setups), or as the re-ranker described above.
+1. **It is not type-aware.** It has no idea what is in scope or which members exist on an object, and standing alone at a `foo.` position a language server beats it outright. Its place is where no language server runs (CodeMirror and Monaco embeddings, plain-JavaScript projects, `cmp-buffer`-style setups), or as the re-ranker described above. What it is worth in that first place is measured in [Where no language server runs](#where-no-language-server-runs) rather than asserted.
 2. **It ranks tokens, not lines.** No ghost text and no multi-token generation; the research this derives from measured whole-line output as right about 1 time in 10 mid-line, and never right past roughly 10 tokens.
 3. **Corpus choice changes the answer, and it is easy to fool yourself.** This is the largest free parameter in a completion benchmark, and during development it inflated the headline through three separate doors: a vendored `assets/vendor/` holding 344 third-party libraries (0.567 became 0.809 on the same repository); a fetched research corpus, 1,249 files of 1,266, reached through the `.ts` and `.tsx` extensions rather than a directory name (54.7 became 80.9); and `.claude/worktrees/`, holding 14 whole duplicate copies of the repository. Vendored bundles and duplicated checkouts repeat themselves enormously, and repetition is exactly what this tool measures. Excluded by default for that reason: `node_modules`, `vendor`, `dist`, `build`, `coverage`, `.next`, `.nuxt`, `.cache`, `.claude`, `.venv`, `venv`, `site-packages`, `.tox`, `__pycache__`, and `*.min.js`. If you widen the net, say what you indexed when you quote the number; a completion accuracy without its corpus definition cannot be read.
 4. **Comments and string contents are indexed.** That was checked rather than assumed, and it goes the other way: restricting to code-only positions lowered identifier accuracy on 4 corpora of 6.
@@ -404,7 +488,7 @@ It reports the recital rate to the editor's log as each document opens, with the
 | `1` | ran, nothing to suggest |
 | `2` | could not run, or could not measure: a usage error, an unreadable file, an index of zero files, too few files to hold any out, zero scored positions, or a scorer never observed producing both a hit and a miss |
 
-The third exists because a clean result from an instrument that could not fail is worth nothing; `measure` refuses rather than printing a number it cannot support.
+The third exists because a clean result from an instrument that could not fail is worth nothing; `measure` and `opendocs` both refuse rather than printing a number they cannot support.
 
 ## License
 
