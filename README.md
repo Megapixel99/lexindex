@@ -306,6 +306,7 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 | `docs.open(id, text)`, `.close(id)`, `.activate(id)` | add or replace a document, drop one, move the cursor; all chain |
 | `docs.completer(opts)`, `.session(opts)`, `.recital(text)`, `.index`, `.size` | the blend over the open set, and the number that says whether it is helping |
 | `completionSource(docs, { k, cacheBeta, minPrefix })` | a CodeMirror 6 `CompletionSource`, from `lexindex/codemirror` |
+| `completionProvider(docs, { monaco, kind, k, cacheBeta, minPrefix })` | a Monaco `CompletionItemProvider`, from `lexindex/monaco` |
 | `completer.session()` | a `BufferSession`: the same calls, re-lexing only what you typed |
 | `session.complete(...)`, `.completeScored(...)`, `.rerank(...)` | drop-in replacements that keep the buffer between keystrokes |
 | `completer.setBuffer(tokens)` and `.suggest(prev, { k, prefix })` | the lower-level path |
@@ -485,15 +486,32 @@ autocompletion({ override: [completionSource(docs)] });
 
 An embedding with exactly one document therefore has an empty index and is served entirely by the cache — which is not a degenerate case but the measured one, and the one that still beats `completeAnyWord` by 35.2% to 27.7% (z=9.01).
 
-### It adds no dependency, CodeMirror included
+### Monaco
 
-`completionSource` imports nothing from CodeMirror. A completion source is a function from a context to a result, both plain objects, and the only things it reads are `pos`, `explicit` and `state.doc.sliceString` — so importing `@codemirror/autocomplete` to borrow a type would put a dependency in a package whose first paragraph invites you to check that it has none. The suite asserts the surface instead, with a context that throws on any other property, which is how a future edit reaching for `context.matchBefore` gets caught here rather than in somebody's build.
+The same `DocumentSet`, a different provider shape:
 
-Two details are decisions rather than defaults, the same two the language server makes. Every option carries a descending `boost`, because CodeMirror re-ranks what it is handed and an ordering not expressed as `boost` is an ordering thrown away — the ranking is the only thing this source contributes. And no option carries a `type`, so nothing draws an icon: this package is not type-aware, has no notion of scope, and a confident wrong icon beside every suggestion is worse than none.
+```js
+import { DocumentSet } from "lexindex/browser";
+import { completionProvider } from "lexindex/monaco";
 
-There is no `validFor`. It would let CodeMirror filter the list as more characters arrive instead of asking again, which is cheaper and wrong — the ranking is conditioned on the token before the cursor, so another keystroke can reorder the list and bring in candidates that were never in it. Asking again is affordable because the source holds a `BufferSession`, which re-lexes what was typed rather than the document.
+const docs = new DocumentSet();
+monaco.languages.registerCompletionItemProvider(
+  "javascript",
+  completionProvider(docs, { monaco })
+);
+```
 
-**Monaco has no adapter here.** The measurement covers it and the mechanism does not care, but a provider nobody has written is not something to document as though it existed; `DocumentSet` plus `session.completeScored` is what one would be built from.
+It asks for `monaco` for exactly one reason. A Monaco completion item carries a `kind`, and that value is a member of Monaco's own `CompletionItemKind` enum — a TypeScript enum belonging to that package, not a number fixed by a wire protocol the way `lexindex-lsp`'s `kind: 1` is fixed by LSP. A literal here would commit this repository to a number it cannot check and nothing would notice when it drifted, so the constant is read off the namespace you have already imported. Pass `kind` yourself instead if you would rather, or pass neither and no item claims a kind at all.
+
+It registers no `triggerCharacters`, which is also a decision: putting `.` in the list would place this in front of member completions, and the first entry in *What it cannot do* is that it has no idea what is in scope and loses outright at a `foo.` position. Where a real language service is registered as well, Monaco merges both providers' suggestions, which is the intended arrangement — the same one the language server section describes.
+
+### Neither adapter adds a dependency
+
+`completionSource` imports nothing from CodeMirror and `completionProvider` imports nothing from Monaco. A completion source is a function from a context to a result and a provider is an object with one method; between them they read `pos`, `explicit` and `state.doc.sliceString` on one side, and `model.getValueInRange`, `position.lineNumber` and `position.column` on the other. All plain data. Importing either editor to borrow a type would put a dependency in a package whose first paragraph invites you to check that it has none.
+
+So the suite asserts the surface instead, driving both adapters with an editor object that **throws** on any property they are not supposed to touch. A future edit reaching for `context.matchBefore` or `model.getWordUntilPosition` fails there rather than in somebody's build. The Monaco model in that suite honours the range it is handed, 1-based columns and all, because a provider that built the text-above-the-cursor range wrongly would rank against the wrong text and a model that ignored the range would hide it.
+
+Both make the same three decisions, and they are the language server's. **The ranking is expressed in the field the editor sorts on** — `boost` for CodeMirror, `sortText` for Monaco — because an editor re-sorts what it is handed and an ordering left implicit is an ordering thrown away, which is the only thing either adapter contributes. **Nothing claims an icon**: no `type`, and no `kind` unless you supply one, because this package is not type-aware and a confident wrong icon beside every suggestion is worse than none. **Neither lets the editor filter a cached list** — CodeMirror by omitting `validFor`, Monaco by setting `incomplete` — because the ranking is conditioned on the token before the cursor, so another keystroke can reorder the list and bring in candidates that were never in it. Asking again is affordable because each adapter holds a `BufferSession`, which re-lexes what was typed rather than the document.
 
 ## Exit codes
 

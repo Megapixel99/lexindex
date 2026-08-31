@@ -90,17 +90,18 @@ describe("the browser export — nothing in its import graph is a node builtin",
     );
   });
 
-  test("src/codemirror.js reaches no external specifier either, CodeMirror included", () => {
-    const { external } = walk("codemirror.js");
-    assert.deepEqual(
-      [...external].sort(),
-      [],
-      "the completion source is written against CodeMirror's shape, not its package"
-    );
+  test("the editor adapters reach no external specifier either, their editors included", () => {
+    for (const [entry, editor] of [["codemirror.js", "CodeMirror"], ["monaco.js", "Monaco"]]) {
+      assert.deepEqual(
+        [...walk(entry).external].sort(),
+        [],
+        `the ${editor} adapter is written against that editor's shape, not its package`
+      );
+    }
   });
 
   test("no file in either graph loads anything dynamically, which the walk cannot follow", () => {
-    for (const entry of ["index.js", "browser.js", "codemirror.js"]) {
+    for (const entry of ["index.js", "browser.js", "codemirror.js", "monaco.js"]) {
       assert.deepEqual(
         [...walk(entry).dynamic],
         [],
@@ -140,6 +141,7 @@ describe("the exports map", () => {
   test("names the browser and codemirror subpaths", () => {
     assert.equal(pkg.exports["./browser"], "./src/browser.js");
     assert.equal(pkg.exports["./codemirror"], "./src/codemirror.js");
+    assert.equal(pkg.exports["./monaco"], "./src/monaco.js");
   });
 
   test("every target it names is a file that exists and imports cleanly", async () => {

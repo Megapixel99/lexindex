@@ -74,6 +74,7 @@ jobs:
           # to something still carrying buildIndex, it is not doing its one job.
           node -e "import('lexindex/browser').then(m=>{if(!m.DocumentSet||!m.Completer)throw new Error('missing exports');if(m.buildIndex)throw new Error('the browser entry still exports buildIndex');console.log('browser subpath ok')})"
           node -e "import('lexindex/codemirror').then(m=>{if(!m.completionSource)throw new Error('missing completionSource');console.log('codemirror subpath ok')})"
+          node -e "import('lexindex/monaco').then(m=>{if(!m.completionProvider)throw new Error('missing completionProvider');console.log('monaco subpath ok')})"
           # Both binaries must be on PATH in a real install, not just present in the tree.
           test -x node_modules/.bin/lexindex     || { echo "::error::lexindex not installed as a binary"; exit 1; }
           test -x node_modules/.bin/lexindex-lsp || { echo "::error::lexindex-lsp not installed as a binary"; exit 1; }

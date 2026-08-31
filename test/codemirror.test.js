@@ -125,6 +125,22 @@ describe("the CodeMirror source — what it offers", () => {
     const source = completionSource(setOf(A, B, C), { k: 2 });
     assert.ok(source(contextAt("const c").ctx).options.length <= 2);
   });
+
+  test("a full k of identifiers is offered even where punctuation ranks above them", () => {
+    // The regression this shares with lexindex-lsp. Asking the index for k and then
+    // dropping the punctuation returns fewer than k whenever punctuation ranks highly,
+    // which at a `const ` or a `= ` is most of the time: here the narrow ask leaves 2 of
+    // the 5 asked for. Asking wide and stopping at k is what fixes it.
+    const docs = setOf(A, B, C);
+    const source = completionSource(docs, { k: 5 });
+    const session = docs.session();
+    for (const text of ["const ", "return ", "= "]) {
+      const narrow = session.completeScored(text, { k: 5 }).filter((e) => isWord(e.token)).length;
+      const offered = source(contextAt(text, { explicit: true }).ctx).options.length;
+      assert.equal(offered, 5, `only ${offered} identifiers at ${JSON.stringify(text)}`);
+      assert.ok(offered > narrow, `the narrow ask already returned ${narrow}; no regression to catch`);
+    }
+  });
 });
 
 describe("the CodeMirror source — when it stays quiet", () => {
