@@ -305,6 +305,8 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 | `new DocumentSet({ order })` | an index over the open documents; `lexindex/browser` and the main entry both export it |
 | `docs.open(id, text)`, `.close(id)`, `.activate(id)` | add or replace a document, drop one, move the cursor; all chain |
 | `docs.completer(opts)`, `.session(opts)`, `.recital(text)`, `.index`, `.size` | the blend over the open set, and the number that says whether it is helping |
+| `new DocumentSet({ maxLength, skipGenerated, onRecital, onExcluded })` | the file walker's 400 KB ceiling and generated-code flagging, and the two ways it reports itself |
+| `docs.excluded`, `docs.generated` | which documents are open but not indexed, and which look generated |
 | `completionSource(docs, { k, cacheBeta, minPrefix })` | a CodeMirror 6 `CompletionSource`, from `lexindex/codemirror` |
 | `completionProvider(docs, { monaco, kind, k, cacheBeta, minPrefix })` | a Monaco `CompletionItemProvider`, from `lexindex/monaco` |
 | `completer.session()` | a `BufferSession`: the same calls, re-lexing only what you typed |
@@ -477,6 +479,35 @@ autocompletion({ override: [completionSource(docs)] });
 ```
 
 `open` is also the edit: call it again with the new text and that document's counts are swapped rather than the index rebuilt, which costs a document instead of a corpus. `close` takes a document's counts out with it. What this is worth at the document counts a page actually has is the section above, and it is worth reading before wiring this up rather than after — with one document open the cache carries the whole result and `DocumentSet` contributes nothing.
+
+### It keeps the corpus hygiene the file walker keeps
+
+`collectFiles` skips a file over 400 KB, because minified bundles and generated dumps repeat themselves enormously and repetition is exactly what this measures — point 3 of *What it cannot do*, and the reason that ceiling exists at all. A page has no `stat` to consult, but it has the string, so `DocumentSet` applies the same ceiling to its length. A tab holding a vendored bundle would otherwise walk into the index and make every suggestion quietly worse, which is the failure that looks exactly like the tool simply not being very good.
+
+A document over the ceiling stays **open** — the editor has it, and if it takes the cursor the cache still serves it — it is just never indexed, and never even lexed. Generated code is treated on the CLI's terms rather than the ceiling's: flagged and counted always, excluded only if you ask for `skipGenerated`, because a heuristic that silently dropped a third of somebody's tabs would be worse than the problem.
+
+```js
+const docs = new DocumentSet({
+  maxLength: 400_000,   // the default, matching collectFiles
+  skipGenerated: false, // the default, matching the CLI
+});
+
+docs.excluded;   // Map: id -> "size" | "generated"
+docs.generated;  // Set: ids that look generated, excluded or not
+```
+
+### And it says what it is doing
+
+`lexindex-lsp` writes the recital rate to the editor's log as each document opens, because a server that quietly served weak completions without ever saying so would be the one place in this project where a weakness was hidden. A page has no log to write to, so the number is handed to the caller instead of being dropped:
+
+```js
+const docs = new DocumentSet({
+  onRecital: ({ id, rate, band }) => console.log(`${id}: ${(rate * 100).toFixed(1)}% — ${band}`),
+  onExcluded: ({ id, reason, length }) => console.warn(`${id} not indexed (${reason}, ${length} chars)`),
+});
+```
+
+`onRecital` fires when a document is first opened and when one takes the cursor, which are the two moments the number decides something — not on every edit, and not for a document too short to be scored on any position, since a rate of 0 from zero positions is not a rate. `onExcluded` fires when a document is present but not in the index. Both are optional, and when absent neither costs anything: the recital pass is not run at all.
 
 `lexindex/browser` is this package minus `buildIndex`, `updateIndexFile` and `collectFiles`, which are the only things in it that import `node:fs`. Every other name is the identical object the main entry exports. It exists because a bundler following the main entry has no way to know the file walker is unreachable from a page, and pulls `fs` in anyway — either a wasted shim or a hard resolution error, depending on the bundler. The suite walks the whole import graph from that entry and fails if any external specifier appears, with a positive control over the main entry that must find `node:fs` for the walk to be believed.
 
