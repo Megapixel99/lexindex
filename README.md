@@ -86,7 +86,7 @@ Across nine corpora the hybrid beat the word-based baseline in eight, with paire
 
 Several directories are treated as one corpus, matching `buildIndex`. Measuring them separately splits a repository into underpowered samples; on a repository whose JavaScript lives in three folders, that was the difference between three nulls (z=1.13, 0.58, 1.63) and one answer (z=5.74).
 
-One corpus also means a file reachable through two of those paths is one file. That is the same concern as point 3 below rather than a separate one, and it arrives through this very argument list: `./src ./src/` is two spellings of one directory, a parent and a child overlap, and on a machine whose checkout sits under a symlink two absolute paths can be the same place. Counted twice, this repository's own recital went from 51.0% to 74.0% and its identifier accuracy from 34.6% to 83.3% — a different verdict entirely, from an argument list nobody would look at twice. Files are keyed on their real path so this cannot happen, and both the CLI and the harness say when paths overlapped rather than quietly deduplicating.
+One corpus also means a file reachable through two of those paths is one file. That is the same concern as point 3 below rather than a separate one, and it arrives through this very argument list: `./src ./src/` is two spellings of one directory, a parent and a child overlap, and on a machine whose checkout sits under a symlink two absolute paths can be the same place. Counted twice, this repository's own recital went from 51.0% to 74.0% and its identifier accuracy from 34.6% to 83.3%: a different verdict entirely, from an argument list nobody would look at twice. Files are keyed on their real path so this cannot happen, and both the CLI and the harness say when paths overlapped rather than quietly deduplicating.
 
 ```sh
 node node_modules/lexindex/tools/measure.mjs ./src ./scripts ./tools   # one index, one result
@@ -138,15 +138,15 @@ node node_modules/lexindex/tools/measure.mjs ./src
     excluded: 21 positions offered a single candidate, where every ordering is right
 ```
 
-Read what that is before reading the number. **It is not the tsserver table above.** Reproducing that needs a language server, and the candidate *set* would be a different set — what is in scope, rather than what is in your buffer. What the harness reorders is the list an ordinary editor offers with no language server at all, which is a real candidate list rather than a synthetic one and needs no dependency to produce. So it answers a narrower question than the table: given the words your own editor would show you, does reordering them by this index put the right one first on your repository?
+Read what that is before reading the number. **It is not the tsserver table above.** Reproducing that needs a language server, and the candidate *set* would be a different set: what is in scope, rather than what is in your buffer. What the harness reorders is the list an ordinary editor offers with no language server at all, which is a real candidate list rather than a synthetic one and needs no dependency to produce. So it answers a narrower question than the table: given the words your own editor would show you, does reordering them by this index put the right one first on your repository?
 
-Two exclusions carry weight and are printed rather than buried. A list holding one candidate makes every possible ordering correct whenever that candidate is the answer, so those positions are dropped; leaving them in inflates every row equally and flattens the comparison along with them. And re-ranking returns a permutation, so it can never invent an answer that was not offered — positions where the truth is missing from the list are reported as coverage instead of being scored, because supplying the candidate is the language server's job and not this one's.
+Two exclusions carry weight and are printed rather than buried. A list holding one candidate makes every possible ordering correct whenever that candidate is the answer, so those positions are dropped; leaving them in inflates every row equally and flattens the comparison along with them. And re-ranking returns a permutation, so it can never invent an answer that was not offered: positions where the truth is missing from the list are reported as coverage instead of being scored, because supplying the candidate is the language server's job and not this one's.
 
-The run above is a null, on a corpus chosen for being small. That is the harness working. The table at the top of this README says plainly that there are recital ranges where this tool is expected to lose to one baseline or the other, and a harness that could not report that would not be worth shipping — which is also why it refuses outright rather than printing a number when too few positions survive the exclusions.
+The run above is a null, on a corpus chosen for being small. That is the harness working. The table at the top of this README says plainly that there are recital ranges where this tool is expected to lose to one baseline or the other, and a harness that could not report that would not be worth shipping, which is also why it refuses outright rather than printing a number when too few positions survive the exclusions.
 
 ## Where no language server runs
 
-The first entry in *What it cannot do* names this tool's place — CodeMirror and Monaco embeddings, plain-JavaScript projects — and until now that was the one claim in this README with nothing measured under it. A browser page has no file walker and no repository. The only text it can index is the documents the user currently has open, so the question is not what a repository's recital rate is; it is a sweep. At 1 open document, 3, 8, 30, is there anything here the editor does not already give away?
+The first entry in *What it cannot do* names this tool's place (CodeMirror and Monaco embeddings, plain-JavaScript projects) and until now that was the one claim in this README with nothing measured under it. A browser page has no file walker and no repository. The only text it can index is the documents the user currently has open, so the question is not what a repository's recital rate is; it is a sweep. At 1 open document, 3, 8, 30, is there anything here the editor does not already give away?
 
 ```sh
 node node_modules/lexindex/tools/opendocs.mjs ./src
@@ -168,11 +168,11 @@ Ghost 5.57.2's `core`, 1,068 files, on 2,180 held-out identifier positions fixed
     50    19,740    58.7%     65.9%     35.2%     27.7%     32.4%    25.90    25.17    23.55
 ```
 
-**The column that decides this is the last one, and it is not the obvious one.** Against both word-list baselines the hybrid wins from a single open document on every corpus measured — and that sentence is a trap, because the hybrid is half cache and the cache reads only the document being edited. It wins with one other document open whether or not opening any other document is worth anything, so it would talk somebody into building a tab indexer that earns nothing. `buf only` is the ablation that separates the two: the cache alone over an *empty* index, with no open documents indexed at all. `z vs buf` is the only column that says whether reading the other tabs pays.
+**The column that decides this is the last one, and it is not the obvious one.** Against both word-list baselines the hybrid wins from a single open document on every corpus measured, and that sentence is a trap, because the hybrid is half cache and the cache reads only the document being edited. It wins with one other document open whether or not opening any other document is worth anything, so it would talk somebody into building a tab indexer that earns nothing. `buf only` is the ablation that separates the two: the cache alone over an *empty* index, with no open documents indexed at all. `z vs buf` is the only column that says whether reading the other tabs pays.
 
 Two answers come out of that, and they are different products.
 
-**With one document open, the cache alone is the whole result.** 35.2% against the editor's 27.7% on Ghost (z=9.01) and 30.0% against 21.7% on llocal (z=4.24), with nothing else indexed at all. That is the embedding which has no document set to speak of — a docs page, an admin console's query box, a config editor — and it is served without a `CountModel`, an open-document list, or anything to keep current.
+**With one document open, the cache alone is the whole result.** 35.2% against the editor's 27.7% on Ghost (z=9.01) and 30.0% against 21.7% on llocal (z=4.24), with nothing else indexed at all. That is the embedding which has no document set to speak of (a docs page, an admin console's query box, a config editor) and it is served without a `CountModel`, an open-document list, or anything to keep current.
 
 **Reading the other open documents pays from the first one.** Not the thirtieth. Of the six corpus-and-tab-set combinations measured, four are already significant with a single other document open, and the two that are not (z=1.47 and z=1.86) clear it at two. Nothing narrows back to a null further along the sweep.
 
@@ -186,7 +186,7 @@ Which documents are open is not a neutral choice, so both ends run. `--tabs rand
 
 ### This sweep is more exposed to corpus choice, not less
 
-Its whole subject is how much a few open documents already know about the one being edited, so a corpus where every file opens with the same header answers with the header. Canvas LMS's `app` tree reports 56.7% recital and 72.0% accuracy from **one** open document of 961 tokens, which is not a result — 43.4% of its scored positions sit on a four-token context that more than half of all other files also carry, and that context is the 16-line license notice at the top of every file. So the harness measures that share and prints it, on the same posture as the generated-code check: count it and say so.
+Its whole subject is how much a few open documents already know about the one being edited, so a corpus where every file opens with the same header answers with the header. Canvas LMS's `app` tree reports 56.7% recital and 72.0% accuracy from **one** open document of 961 tokens, which is not a result: 43.4% of its scored positions sit on a four-token context that more than half of all other files also carry, and that context is the 16-line license notice at the top of every file. So the harness measures that share and prints it, on the same posture as the generated-code check: count it and say so.
 
 ```
 BOILERPLATE: 43.4% of those positions sit on a context that more than half the other files also carry
@@ -194,7 +194,7 @@ BOILERPLATE: 43.4% of those positions sit on a context that more than half the o
              preamble, and it is what this sweep will mostly be measuring.
 ```
 
-Nothing is excluded on the strength of it. The first corpus tried here failed the same gate for a different reason — a Cordova app carrying four byte-identical copies of `cordova.js` — and both are point 3 below arriving through the front door rather than a new hazard.
+Nothing is excluded on the strength of it. The first corpus tried here failed the same gate for a different reason (a Cordova app carrying four byte-identical copies of `cordova.js`) and both are point 3 below arriving through the front door rather than a new hazard.
 
 ### What that makes a browser build
 
@@ -219,7 +219,7 @@ lexindex ./service --lang python --stats
 node node_modules/lexindex/tools/measure.mjs --lang go ./pkg
 ```
 
-`python`, `go`, `rust`, `java`, `kotlin`, `ruby`, `c`, `cpp`, `csharp`, `php`, `swift`, `shell`, `sql`, comma-separated, or `all`. **The default is unchanged and stays JavaScript**, because every number in this README was measured on JavaScript and TypeScript corpora and a default that quietly widened would change what those numbers describe. `--lang` also brings that language's build directories with it — `target` for Rust and Java, `bin`/`obj`/`Library` for C# — on the same reasoning `node_modules` is skipped, and only when that language is asked for, since `target` and `bin` are real source directories in somebody's repository.
+`python`, `go`, `rust`, `java`, `kotlin`, `ruby`, `c`, `cpp`, `csharp`, `php`, `swift`, `shell`, `sql`, comma-separated, or `all`. **The default is unchanged and stays JavaScript**, because every number in this README was measured on JavaScript and TypeScript corpora and a default that quietly widened would change what those numbers describe. `--lang` also brings that language's build directories with it (`target` for Rust and Java, `bin`/`obj`/`Library` for C#) on the same reasoning `node_modules` is skipped, and only when that language is asked for, since `target` and `bin` are real source directories in somebody's repository.
 
 Whether it *works* on your language is a question rather than a claim, so the harness takes `--lang` too. Seven corpora, six languages, each a single real project checked for generated and vendored code first:
 
@@ -235,11 +235,11 @@ Whether it *works* on your language is a question rather than a claim, so the ha
 
 `ident+1char`, held-out files, paired McNemar, generated code excluded. The hybrid beat both baselines on all seven, and the gaps are large rather than merely significant.
 
-The falken row was published wrong and is corrected here. It first read 213 files at 64.2% recital and 78.5% accuracy, from a corpus checked by hand for protobuf stubs and vendored directories. More than half of it — 140 files of 266 — turned out to be FlatBuffers output under `generated_flatbuffers/`, which that check did not look for. The verdict survived the correction and the numbers did not. Nothing else in the table moved: the other six corpora hold no generated files at all.
+The falken row was published wrong and is corrected here. It first read 213 files at 64.2% recital and 78.5% accuracy, from a corpus checked by hand for protobuf stubs and vendored directories. More than half of it (140 files of 266) turned out to be FlatBuffers output under `generated_flatbuffers/`, which that check did not look for. The verdict survived the correction and the numbers did not. Nothing else in the table moved: the other six corpora hold no generated files at all.
 
-Read two limits into that before quoting it. **These corpora do not re-derive the thresholds in the table at the top of this README**, which came from JavaScript and TypeScript; several are far larger than the corpora behind those nulls, and z grows with the square root of the sample, so significance arrives more easily here than it did there — which is exactly why the row at 35.2% recital clears the frequency table when the table says that takes about 60%. The band the CLI prints is still the JavaScript-derived one. And seven corpora is seven corpora: it says the mechanism carries, not that it carries at any particular rate on your repository. That is what the harness is for.
+Read two limits into that before quoting it. **These corpora do not re-derive the thresholds in the table at the top of this README**, which came from JavaScript and TypeScript; several are far larger than the corpora behind those nulls, and z grows with the square root of the sample, so significance arrives more easily here than it did there, which is exactly why the row at 35.2% recital clears the frequency table when the table says that takes about 60%. The band the CLI prints is still the JavaScript-derived one. And seven corpora is seven corpora: it says the mechanism carries, not that it carries at any particular rate on your repository. That is what the harness is for.
 
-The warning in *What it cannot do* about corpus choice applies with more force here, not less. Generated code is more common outside the JavaScript world — protobuf stubs, OpenAPI clients, parser tables, ORM scaffolding — and it repeats itself enormously, which is precisely what this tool measures.
+The warning in *What it cannot do* about corpus choice applies with more force here, not less. Generated code is more common outside the JavaScript world (protobuf stubs, OpenAPI clients, parser tables, ORM scaffolding) and it repeats itself enormously, which is precisely what this tool measures.
 
 So the tool looks for it now instead of leaving you to, which is how the falken row above was caught:
 
@@ -249,7 +249,7 @@ lexindex ./service --lang python --skip-generated --stats
 node node_modules/lexindex/tools/measure.mjs --lang python --skip-generated ./service
 ```
 
-It reads the head of each file for the conventional markers — Go's `Code generated … DO NOT EDIT.`, `@generated`, the protobuf and FlatBuffers headers — and recognises a handful of filename conventions such as `*_pb2.py`, `*.pb.go` and `*.min.js`. Only the head, because a file that merely *discusses* generated code is not one; only markers at the start of a line after a comment leader, because `# they could be auto-generated by an admin` in a Rails model is a sentence, not a header. Across 2,288 files in six languages it flagged 141: the 140 FlatBuffers files, and its own source, which contains the marker strings it searches for.
+It reads the head of each file for the conventional markers (Go's `Code generated … DO NOT EDIT.`, `@generated`, the protobuf and FlatBuffers headers) and recognises a handful of filename conventions such as `*_pb2.py`, `*.pb.go` and `*.min.js`. Only the head, because a file that merely *discusses* generated code is not one; only markers at the start of a line after a comment leader, because `# they could be auto-generated by an admin` in a Rails model is a sentence, not a header. Across 2,288 files in six languages it flagged 141: the 140 FlatBuffers files, and its own source, which contains the marker strings it searches for.
 
 **Nothing is excluded by default.** It is a heuristic, and one that silently dropped a third of a repository would be worse than the problem; and every number here was measured without it, so switching it on by default would change what those numbers describe. The default is to count and to say so, which is the same posture as the recital rate: report the thing that decides whether the answer is any good, and let the reader act on it. On sympy's `parsing` module, three ANTLR-generated files among 52 were worth 2.6 points of recital and 9.4 points of accuracy.
 
@@ -320,11 +320,11 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 | `lex(text)`, `isWord(t)`, `splitAtCursor(text)` | the tokenizer |
 | `resolveLanguages(spec)`, `LANGUAGES` | `"python"` or `"py,go"` to `{ extensions, skipDirs }`; also `buildIndex(dirs, { languages })` |
 
-The scores are comparable to each other within one call and are nothing more than that. They are not calibrated probabilities and they do not mean the same thing at two different cursors, so read them to draw a bar or to merge this ranking with another engine's — not as a confidence to cut on. Gating on confidence is the first row of the table above, and it lost three separate times.
+The scores are comparable to each other within one call and are nothing more than that. They are not calibrated probabilities and they do not mean the same thing at two different cursors, so read them to draw a bar or to merge this ranking with another engine's, not as a confidence to cut on. Gating on confidence is the first row of the table above, and it lost three separate times.
 
 `setBuffer` is incremental: extending the previous buffer reuses the cache instead of rebuilding it, which is what keeps the per-keystroke cost flat. On a 369-file, 560K-token index, building takes 1.07 s and a suggestion takes 0.36 ms at the median (p99 3.30 ms).
 
-That 0.36 ms is `suggest(prev, ...)`, which is handed the tokens. `complete(text)` and `rerank(list, text)` are handed the text instead and lex all of it again on every call, so what they cost is the buffer rather than the edit — see below.
+That 0.36 ms is `suggest(prev, ...)`, which is handed the tokens. `complete(text)` and `rerank(list, text)` are handed the text instead and lex all of it again on every call, so what they cost is the buffer rather than the edit: see below.
 
 ## Keeping the index current while you edit
 
@@ -341,11 +341,11 @@ updateIndexFile(built, "src/server.js", editor.text);    // or hand it the unsav
 updateIndexFile(built, "src/gone.js", null);             // deleted
 ```
 
-`retainFileTokens` is what keeps each file's tokens around to be subtracted later, and it is opt-in because it costs memory proportional to the corpus — a one-shot CLI run has no use for it and a long-lived editor process does.
+`retainFileTokens` is what keeps each file's tokens around to be subtracted later, and it is opt-in because it costs memory proportional to the corpus: a one-shot CLI run has no use for it and a long-lived editor process does.
 
 The result is not an approximation of a rebuilt index. It is exactly equal to one, which the suite asserts over edits, deletions, additions and long sequences of edits by comparing the whole count table against a rebuild. On a corpus of 400 files and 422,598 tokens, one file's update took 4.13 ms at the median against 585 ms to rebuild.
 
-That exactness is worth more than the speed. A count left behind at zero would be invisible in a suggestion list and perfectly visible in `recitalRate`, which reads the context tables directly — the index would go on claiming it had seen text that had been deleted, and the recital rate is the one number this project asks anybody to trust.
+That exactness is worth more than the speed. A count left behind at zero would be invisible in a suggestion list and perfectly visible in `recitalRate`, which reads the context tables directly: the index would go on claiming it had seen text that had been deleted, and the recital rate is the one number this project asks anybody to trust.
 
 ## One keystroke should cost one keystroke
 
@@ -365,11 +365,11 @@ session.complete(textBeforeCursor);            // was completer.complete(...)
 session.rerank(candidates, textBeforeCursor);  // was completer.rerank(...)
 ```
 
-It is the same answer, not a faster approximation of one. The suite types real text in one character at a time and asserts the session's list is identical to a freshly built `Completer`'s at every cursor, at every blend, through backspacing and cursor jumps, and on the shapes that break a careless incremental lexer — `12` growing into `123` is one token and not two, and `12ab` is one run of word characters holding two tokens. Across the checks written while building it, 17,784 comparisons produced no disagreement.
+It is the same answer, not a faster approximation of one. The suite types real text in one character at a time and asserts the session's list is identical to a freshly built `Completer`'s at every cursor, at every blend, through backspacing and cursor jumps, and on the shapes that break a careless incremental lexer: `12` growing into `123` is one token and not two, and `12ab` is one run of word characters holding two tokens. Across the checks written while building it, 17,784 comparisons produced no disagreement.
 
-What makes that safe is a property of the lexer rather than bookkeeping. A token is an identifier, a number, or one non-word character, so no token can span a non-word character; any position whose preceding character is a non-word character therefore has everything before it settled, whatever gets typed next. The session re-lexes from the latest such position and reuses the rest. An edit that is not an extension — a backspace, a jump — is rebuilt from scratch, which costs exactly what the plain `Completer` costs today.
+What makes that safe is a property of the lexer rather than bookkeeping. A token is an identifier, a number, or one non-word character, so no token can span a non-word character; any position whose preceding character is a non-word character therefore has everything before it settled, whatever gets typed next. The session re-lexes from the latest such position and reuses the rest. An edit that is not an extension (a backspace, a jump) is rebuilt from scratch, which costs exactly what the plain `Completer` costs today.
 
-Suggestions are also selected rather than sorted now. Ranking 5 candidates out of the roughly 1,700 a live buffer offers had been ordering the 1,695 nobody would see. Because candidates are map keys, no two share a token, so score-then-token is a total order and taking the best k is byte-identical to sorting and slicing — which the suite checks against the full ordering rather than assuming.
+Suggestions are also selected rather than sorted now. Ranking 5 candidates out of the roughly 1,700 a live buffer offers had been ordering the 1,695 nobody would see. Because candidates are map keys, no two share a token, so score-then-token is a total order and taking the best k is byte-identical to sorting and slicing, which the suite checks against the full ordering rather than assuming.
 
 ## The CLI
 
@@ -409,7 +409,7 @@ Suggestions go to stdout one per line and everything else goes to stderr, so the
 
 ## In your editor
 
-The tool has always said where it belongs — *where no language server runs* — and then shipped one CLI, leaving everybody to build the same bridge. So it ships a language server now, speaking completion and nothing else, over the protocol every editor already knows.
+The tool has always said where it belongs (*where no language server runs*) and then shipped one CLI, leaving everybody to build the same bridge. So it ships a language server now, speaking completion and nothing else, over the protocol every editor already knows.
 
 ```sh
 npx lexindex-lsp                 # indexes the workspace root the editor reports
@@ -431,7 +431,7 @@ vim.api.nvim_create_autocmd("FileType", {
 })
 ```
 
-**Helix**, in `languages.toml` — note it sits *beside* the type-aware server rather than replacing it:
+**Helix**, in `languages.toml`: note it sits *beside* the type-aware server rather than replacing it:
 
 ```toml
 [language-server.lexindex]
@@ -455,15 +455,15 @@ Running it alongside a real language server is the intended arrangement wherever
 
 Two details are worth knowing because they are decisions rather than defaults. Completions are identifier-shaped only: the measurements score punctuation because a fair benchmark has to, but a popup offering `;` is noise, and aggregate top-1 is mostly punctuation for every engine including this one. And every item carries a `sortText`, because an editor that re-sorts alphabetically throws away the only thing this server contributes.
 
-It follows the tree, not just the buffer you have open. A save updates that one file, and where the editor supports file watching the server registers for it, so a branch switch, a rebase, a codegen step or a second editor also reach the index — none of which the editor would otherwise tell it about. The client does the watching because it already is: a second recursive watcher from every language server is how a machine runs out of file handles. A client that cannot watch keeps the save-time updates and is told so in the log.
+It follows the tree, not just the buffer you have open. A save updates that one file, and where the editor supports file watching the server registers for it, so a branch switch, a rebase, a codegen step or a second editor also reach the index: none of which the editor would otherwise tell it about. The client does the watching because it already is: a second recursive watcher from every language server is how a machine runs out of file handles. A client that cannot watch keeps the save-time updates and is told so in the log.
 
-A watched change is reconciled against the disk rather than trusted. The event says what the editor thinks happened; the disk says what did, and the disk is what the index claims to describe — so a stale `Deleted` for a file that is still there leaves it indexed. And a batch large enough that folding it in one file at a time would cost more than rebuilding is rebuilt instead, against the build time this corpus actually measured at startup rather than a guess. A branch switch touching hundreds of files should not stall completions for seconds.
+A watched change is reconciled against the disk rather than trusted. The event says what the editor thinks happened; the disk says what did, and the disk is what the index claims to describe, so a stale `Deleted` for a file that is still there leaves it indexed. And a batch large enough that folding it in one file at a time would cost more than rebuilding is rebuilt instead, against the build time this corpus actually measured at startup rather than a guess. A branch switch touching hundreds of files should not stall completions for seconds.
 
 It reports the recital rate to the editor's log as each document opens, with the band it falls in. That number decides whether any of this is worth having, and a server that quietly served weak completions without ever saying so would be the one place in this project where it was hidden.
 
 ## In a browser
 
-The section above is the arrangement wherever a language server runs. Where none does, there is no file walker and no repository to index — only the documents the page happens to have open, which is what `DocumentSet` holds.
+The section above is the arrangement wherever a language server runs. Where none does, there is no file walker and no repository to index, only the documents the page happens to have open, which is what `DocumentSet` holds.
 
 ```js
 import { DocumentSet } from "lexindex/browser";
@@ -478,13 +478,13 @@ docs.activate("app.js");           // the one with the cursor
 autocompletion({ override: [completionSource(docs)] });
 ```
 
-`open` is also the edit: call it again with the new text and that document's counts are swapped rather than the index rebuilt, which costs a document instead of a corpus. `close` takes a document's counts out with it. What this is worth at the document counts a page actually has is the section above, and it is worth reading before wiring this up rather than after — with one document open the cache carries the whole result and `DocumentSet` contributes nothing.
+`open` is also the edit: call it again with the new text and that document's counts are swapped rather than the index rebuilt, which costs a document instead of a corpus. `close` takes a document's counts out with it. What this is worth at the document counts a page actually has is the section above, and it is worth reading before wiring this up rather than after, with one document open the cache carries the whole result and `DocumentSet` contributes nothing.
 
 ### It keeps the corpus hygiene the file walker keeps
 
-`collectFiles` skips a file over 400 KB, because minified bundles and generated dumps repeat themselves enormously and repetition is exactly what this measures — point 3 of *What it cannot do*, and the reason that ceiling exists at all. A page has no `stat` to consult, but it has the string, so `DocumentSet` applies the same ceiling to its length. A tab holding a vendored bundle would otherwise walk into the index and make every suggestion quietly worse, which is the failure that looks exactly like the tool simply not being very good.
+`collectFiles` skips a file over 400 KB, because minified bundles and generated dumps repeat themselves enormously and repetition is exactly what this measures: point 3 of *What it cannot do*, and the reason that ceiling exists at all. A page has no `stat` to consult, but it has the string, so `DocumentSet` applies the same ceiling to its length. A tab holding a vendored bundle would otherwise walk into the index and make every suggestion quietly worse, which is the failure that looks exactly like the tool simply not being very good.
 
-A document over the ceiling stays **open** — the editor has it, and if it takes the cursor the cache still serves it — it is just never indexed, and never even lexed. Generated code is treated on the CLI's terms rather than the ceiling's: flagged and counted always, excluded only if you ask for `skipGenerated`, because a heuristic that silently dropped a third of somebody's tabs would be worse than the problem.
+A document over the ceiling stays **open** (the editor has it, and if it takes the cursor the cache still serves it) it is just never indexed, and never even lexed. Generated code is treated on the CLI's terms rather than the ceiling's: flagged and counted always, excluded only if you ask for `skipGenerated`, because a heuristic that silently dropped a third of somebody's tabs would be worse than the problem.
 
 ```js
 const docs = new DocumentSet({
@@ -507,15 +507,15 @@ const docs = new DocumentSet({
 });
 ```
 
-`onRecital` fires when a document is first opened and when one takes the cursor, which are the two moments the number decides something — not on every edit, and not for a document too short to be scored on any position, since a rate of 0 from zero positions is not a rate. `onExcluded` fires when a document is present but not in the index. Both are optional, and when absent neither costs anything: the recital pass is not run at all.
+`onRecital` fires when a document is first opened and when one takes the cursor, which are the two moments the number decides something, not on every edit, and not for a document too short to be scored on any position, since a rate of 0 from zero positions is not a rate. `onExcluded` fires when a document is present but not in the index. Both are optional, and when absent neither costs anything: the recital pass is not run at all.
 
-`lexindex/browser` is this package minus `buildIndex`, `updateIndexFile` and `collectFiles`, which are the only things in it that import `node:fs`. Every other name is the identical object the main entry exports. It exists because a bundler following the main entry has no way to know the file walker is unreachable from a page, and pulls `fs` in anyway — either a wasted shim or a hard resolution error, depending on the bundler. The suite walks the whole import graph from that entry and fails if any external specifier appears, with a positive control over the main entry that must find `node:fs` for the walk to be believed.
+`lexindex/browser` is this package minus `buildIndex`, `updateIndexFile` and `collectFiles`, which are the only things in it that import `node:fs`. Every other name is the identical object the main entry exports. It exists because a bundler following the main entry has no way to know the file walker is unreachable from a page, and pulls `fs` in anyway: either a wasted shim or a hard resolution error, depending on the bundler. The suite walks the whole import graph from that entry and fails if any external specifier appears, with a positive control over the main entry that must find `node:fs` for the walk to be believed.
 
 ### The document holding the cursor is not in the index
 
 `activate(id)` takes that document out and puts the previous one back. It is the one decision here worth arguing with, so: the buffer is already served by the cache half of the blend, which reads the text above the cursor and nothing below it. Indexing the active document too would hand the completer the rest of the file, including the continuation it is being asked to predict, and every accuracy in this README was measured with the edited document held out. An index that quietly saw the answer would report a number nobody could reproduce from the harness.
 
-An embedding with exactly one document therefore has an empty index and is served entirely by the cache — which is not a degenerate case but the measured one, and the one that still beats `completeAnyWord` by 35.2% to 27.7% (z=9.01).
+An embedding with exactly one document therefore has an empty index and is served entirely by the cache, which is not a degenerate case but the measured one, and the one that still beats `completeAnyWord` by 35.2% to 27.7% (z=9.01).
 
 ### Monaco
 
@@ -532,9 +532,9 @@ monaco.languages.registerCompletionItemProvider(
 );
 ```
 
-It asks for `monaco` for exactly one reason. A Monaco completion item carries a `kind`, and that value is a member of Monaco's own `CompletionItemKind` enum — a TypeScript enum belonging to that package, not a number fixed by a wire protocol the way `lexindex-lsp`'s `kind: 1` is fixed by LSP. A literal here would commit this repository to a number it cannot check and nothing would notice when it drifted, so the constant is read off the namespace you have already imported. Pass `kind` yourself instead if you would rather, or pass neither and no item claims a kind at all.
+It asks for `monaco` for exactly one reason. A Monaco completion item carries a `kind`, and that value is a member of Monaco's own `CompletionItemKind` enum: a TypeScript enum belonging to that package, not a number fixed by a wire protocol the way `lexindex-lsp`'s `kind: 1` is fixed by LSP. A literal here would commit this repository to a number it cannot check and nothing would notice when it drifted, so the constant is read off the namespace you have already imported. Pass `kind` yourself instead if you would rather, or pass neither and no item claims a kind at all.
 
-It registers no `triggerCharacters`, which is also a decision: putting `.` in the list would place this in front of member completions, and the first entry in *What it cannot do* is that it has no idea what is in scope and loses outright at a `foo.` position. Where a real language service is registered as well, Monaco merges both providers' suggestions, which is the intended arrangement — the same one the language server section describes.
+It registers no `triggerCharacters`, which is also a decision: putting `.` in the list would place this in front of member completions, and the first entry in *What it cannot do* is that it has no idea what is in scope and loses outright at a `foo.` position. Where a real language service is registered as well, Monaco merges both providers' suggestions, which is the intended arrangement: the same one the language server section describes.
 
 ### Neither adapter adds a dependency
 
@@ -542,7 +542,7 @@ It registers no `triggerCharacters`, which is also a decision: putting `.` in th
 
 So the suite asserts the surface instead, driving both adapters with an editor object that **throws** on any property they are not supposed to touch. A future edit reaching for `context.matchBefore` or `model.getWordUntilPosition` fails there rather than in somebody's build. The Monaco model in that suite honours the range it is handed, 1-based columns and all, because a provider that built the text-above-the-cursor range wrongly would rank against the wrong text and a model that ignored the range would hide it.
 
-Both make the same three decisions, and they are the language server's. **The ranking is expressed in the field the editor sorts on** — `boost` for CodeMirror, `sortText` for Monaco — because an editor re-sorts what it is handed and an ordering left implicit is an ordering thrown away, which is the only thing either adapter contributes. **Nothing claims an icon**: no `type`, and no `kind` unless you supply one, because this package is not type-aware and a confident wrong icon beside every suggestion is worse than none. **Neither lets the editor filter a cached list** — CodeMirror by omitting `validFor`, Monaco by setting `incomplete` — because the ranking is conditioned on the token before the cursor, so another keystroke can reorder the list and bring in candidates that were never in it. Asking again is affordable because each adapter holds a `BufferSession`, which re-lexes what was typed rather than the document.
+Both make the same three decisions, and they are the language server's. **The ranking is expressed in the field the editor sorts on** (`boost` for CodeMirror, `sortText` for Monaco) because an editor re-sorts what it is handed and an ordering left implicit is an ordering thrown away, which is the only thing either adapter contributes. **Nothing claims an icon**: no `type`, and no `kind` unless you supply one, because this package is not type-aware and a confident wrong icon beside every suggestion is worse than none. **Neither lets the editor filter a cached list** (CodeMirror by omitting `validFor`, Monaco by setting `incomplete`) because the ranking is conditioned on the token before the cursor, so another keystroke can reorder the list and bring in candidates that were never in it. Asking again is affordable because each adapter holds a `BufferSession`, which re-lexes what was typed rather than the document.
 
 ## Exit codes
 
