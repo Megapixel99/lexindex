@@ -63,13 +63,17 @@ jobs:
       # once as a bare string, which permits no subpaths, so `require('lexindex/package.json')`
       # threw ERR_PACKAGE_PATH_NOT_EXPORTED for any tool that reads a dependency's manifest.
       # Nothing in the source tree could catch that; only an install can.
-      - name: an installed copy resolves both the entry point and the manifest
+      - name: an installed copy resolves the entry point, the manifest and both subpaths
         run: |
           tarball="$(npm pack --silent)"
           mkdir /tmp/consumer && cd /tmp/consumer && npm init -y > /dev/null
           npm i "$GITHUB_WORKSPACE/$tarball" --silent
           node -e "const v=require('lexindex/package.json').version; console.log('manifest subpath ok', v)"
           node -e "import('lexindex').then(m=>{if(!m.buildIndex||!m.Completer)throw new Error('missing exports');console.log('entry point ok')})"
+          # The browser subpath exists so a bundler is not handed node:fs. If it resolves
+          # to something still carrying buildIndex, it is not doing its one job.
+          node -e "import('lexindex/browser').then(m=>{if(!m.DocumentSet||!m.Completer)throw new Error('missing exports');if(m.buildIndex)throw new Error('the browser entry still exports buildIndex');console.log('browser subpath ok')})"
+          node -e "import('lexindex/codemirror').then(m=>{if(!m.completionSource)throw new Error('missing completionSource');console.log('codemirror subpath ok')})"
           # Both binaries must be on PATH in a real install, not just present in the tree.
           test -x node_modules/.bin/lexindex     || { echo "::error::lexindex not installed as a binary"; exit 1; }
           test -x node_modules/.bin/lexindex-lsp || { echo "::error::lexindex-lsp not installed as a binary"; exit 1; }

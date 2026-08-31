@@ -198,35 +198,9 @@ Nothing is excluded on the strength of it. The first corpus tried here failed th
 
 ### What that makes a browser build
 
-Not much, which is the point. Nothing under `src/` reaches for a file system except `build.js`, and a page has no use for it: `CountModel` already takes token arrays, and `addFileTokens`, `replaceFileTokens` and `finalize` are exactly the API an open-document set needs.
+Not much, which is the point, and it is shipped: see [In a browser](#in-a-browser). Nothing under `src/` reached for a file system except `build.js`, so the work was an export that leaves it out rather than a second implementation.
 
-```js
-import { lex, CountModel, Completer } from "lexindex";
-
-const index = new CountModel(5);
-const tokens = new Map();
-for (const [name, text] of openDocuments) {
-  const t = lex(text);
-  tokens.set(name, t);
-  index.addFileTokens(t);
-}
-index.finalize();
-
-const session = new Completer(index).session();
-session.complete(textBeforeCursor);                  // per keystroke
-
-index.replaceFileTokens(tokens.get("b.js"), null);   // a tab closes
-```
-
-The one-document embedding skips all of it. An empty index with `cacheBeta: 1` is the row that needs no document set:
-
-```js
-const cacheOnly = new Completer(new CountModel(5).finalize(), { cacheBeta: 1 });
-```
-
-What stands in the way is packaging rather than mechanism, and it should be said rather than discovered: `src/index.js` is this package's only export and it re-exports `buildIndex`, so a bundler following that entry pulls `node:fs` into a page that never calls it. That is a second export path, not a rewrite.
-
-And the rule that governs all of this is point 5 below and the last row of *Seven things it deliberately does not do*, both unchanged. The index has to be built from the documents the user has open, in their browser. A prebuilt one shipped with the page was measured at 57 times the corpus for +0.000, while the second document somebody actually has open is worth z=4.63.
+The rule that governs all of it is point 5 below and the last row of *Seven things it deliberately does not do*, both unchanged. The index has to be built from the documents the user has open, in their browser. A prebuilt one shipped with the page was measured at 57 times the corpus for +0.000, while the second document somebody actually has open is worth z=4.63.
 
 ## What it cannot do
 
@@ -328,6 +302,10 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 | `completer.rerank(candidates, textBeforeCursor)` | reorders another engine's list; returns a permutation, so nothing is added and nothing is dropped |
 | `completer.rerankTokens(candidates, prev)` | the same, for a caller that already holds the tokens |
 | `completer.scoreCandidates(prev, candidates)` | `Map<candidate, score>`, the blend over a supplied set |
+| `new DocumentSet({ order })` | an index over the open documents; `lexindex/browser` and the main entry both export it |
+| `docs.open(id, text)`, `.close(id)`, `.activate(id)` | add or replace a document, drop one, move the cursor; all chain |
+| `docs.completer(opts)`, `.session(opts)`, `.recital(text)`, `.index`, `.size` | the blend over the open set, and the number that says whether it is helping |
+| `completionSource(docs, { k, cacheBeta, minPrefix })` | a CodeMirror 6 `CompletionSource`, from `lexindex/codemirror` |
 | `completer.session()` | a `BufferSession`: the same calls, re-lexing only what you typed |
 | `session.complete(...)`, `.completeScored(...)`, `.rerank(...)` | drop-in replacements that keep the buffer between keystrokes |
 | `completer.setBuffer(tokens)` and `.suggest(prev, { k, prefix })` | the lower-level path |
@@ -479,6 +457,43 @@ It follows the tree, not just the buffer you have open. A save updates that one 
 A watched change is reconciled against the disk rather than trusted. The event says what the editor thinks happened; the disk says what did, and the disk is what the index claims to describe — so a stale `Deleted` for a file that is still there leaves it indexed. And a batch large enough that folding it in one file at a time would cost more than rebuilding is rebuilt instead, against the build time this corpus actually measured at startup rather than a guess. A branch switch touching hundreds of files should not stall completions for seconds.
 
 It reports the recital rate to the editor's log as each document opens, with the band it falls in. That number decides whether any of this is worth having, and a server that quietly served weak completions without ever saying so would be the one place in this project where it was hidden.
+
+## In a browser
+
+The section above is the arrangement wherever a language server runs. Where none does, there is no file walker and no repository to index — only the documents the page happens to have open, which is what `DocumentSet` holds.
+
+```js
+import { DocumentSet } from "lexindex/browser";
+import { completionSource } from "lexindex/codemirror";
+import { autocompletion } from "@codemirror/autocomplete";
+
+const docs = new DocumentSet();
+docs.open("app.js", appText);      // every document the page holds
+docs.open("util.js", utilText);
+docs.activate("app.js");           // the one with the cursor
+
+autocompletion({ override: [completionSource(docs)] });
+```
+
+`open` is also the edit: call it again with the new text and that document's counts are swapped rather than the index rebuilt, which costs a document instead of a corpus. `close` takes a document's counts out with it. What this is worth at the document counts a page actually has is the section above, and it is worth reading before wiring this up rather than after — with one document open the cache carries the whole result and `DocumentSet` contributes nothing.
+
+`lexindex/browser` is this package minus `buildIndex`, `updateIndexFile` and `collectFiles`, which are the only things in it that import `node:fs`. Every other name is the identical object the main entry exports. It exists because a bundler following the main entry has no way to know the file walker is unreachable from a page, and pulls `fs` in anyway — either a wasted shim or a hard resolution error, depending on the bundler. The suite walks the whole import graph from that entry and fails if any external specifier appears, with a positive control over the main entry that must find `node:fs` for the walk to be believed.
+
+### The document holding the cursor is not in the index
+
+`activate(id)` takes that document out and puts the previous one back. It is the one decision here worth arguing with, so: the buffer is already served by the cache half of the blend, which reads the text above the cursor and nothing below it. Indexing the active document too would hand the completer the rest of the file, including the continuation it is being asked to predict, and every accuracy in this README was measured with the edited document held out. An index that quietly saw the answer would report a number nobody could reproduce from the harness.
+
+An embedding with exactly one document therefore has an empty index and is served entirely by the cache — which is not a degenerate case but the measured one, and the one that still beats `completeAnyWord` by 35.2% to 27.7% (z=9.01).
+
+### It adds no dependency, CodeMirror included
+
+`completionSource` imports nothing from CodeMirror. A completion source is a function from a context to a result, both plain objects, and the only things it reads are `pos`, `explicit` and `state.doc.sliceString` — so importing `@codemirror/autocomplete` to borrow a type would put a dependency in a package whose first paragraph invites you to check that it has none. The suite asserts the surface instead, with a context that throws on any other property, which is how a future edit reaching for `context.matchBefore` gets caught here rather than in somebody's build.
+
+Two details are decisions rather than defaults, the same two the language server makes. Every option carries a descending `boost`, because CodeMirror re-ranks what it is handed and an ordering not expressed as `boost` is an ordering thrown away — the ranking is the only thing this source contributes. And no option carries a `type`, so nothing draws an icon: this package is not type-aware, has no notion of scope, and a confident wrong icon beside every suggestion is worse than none.
+
+There is no `validFor`. It would let CodeMirror filter the list as more characters arrive instead of asking again, which is cheaper and wrong — the ranking is conditioned on the token before the cursor, so another keystroke can reorder the list and bring in candidates that were never in it. Asking again is affordable because the source holds a `BufferSession`, which re-lexes what was typed rather than the document.
+
+**Monaco has no adapter here.** The measurement covers it and the mechanism does not care, but a provider nobody has written is not something to document as though it existed; `DocumentSet` plus `session.completeScored` is what one would be built from.
 
 ## Exit codes
 

@@ -5,6 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.js",
+    "./browser": "./src/browser.js",
+    "./codemirror": "./src/codemirror.js",
     "./package.json": "./package.json"
   },
   "bin": {
