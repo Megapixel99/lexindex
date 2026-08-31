@@ -15,6 +15,7 @@ export { CountModel, recitalBand } from "./count-model.js";
 export { CacheModel } from "./cache-model.js";
 export { Completer } from "./completer.js";
 export { BufferSession } from "./session.js";
+export { DocumentSet } from "./documents.js";
 export { buildIndex, updateIndexFile, collectFiles } from "./build.js";
 export { LANGUAGES, LANGUAGE_NAMES, resolveLanguages } from "./languages.js";
 export { isLikelyGenerated } from "./generated.js";
