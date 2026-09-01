@@ -4,6 +4,7 @@
 
 test/
 .github/
+reports/
 tools/measure.mjs.map
 
 .gitignore

@@ -15,7 +15,24 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node }}
-      - run: npm test
+
+      # `npm test` exiting 0 does not mean the suite ran. `test/*.test.js` is a glob, and a
+      # glob that matches two files instead of nine reports exactly the same green as one
+      # that matches all of them. These two put a floor under the denominator: `didrun`
+      # asks whether a command did anything at all, `zerocase` reads the number out of the
+      # report the runner already wrote. Installed globally on purpose -- this package
+      # claims no dependencies of its own, and that claim stays true.
+      - name: install the guards
+        run: |
+          npm install -g @megapixel99/didrun
+          npm install -g zerocase
+
+      # `test:ci` is `npm test` with a junit report beside it. The floor applies to what
+      # EXECUTED, not to the total, so a suite that skipped its way to green does not clear
+      # it either. 200 is a floor under collapse rather than a target: the suite runs
+      # 250-odd today, and losing a whole file should fail here instead of passing quietly.
+      - name: the suite ran, and ran enough of itself to mean anything
+        run: zerocase --junit reports/junit.xml --min 200 -- npm run test:ci
 
   # The README's central instruction is "run the measurement on your own repo". If the
   # harness cannot run, that instruction is broken, so CI runs it against this repo. The
@@ -27,13 +44,22 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with: { node-version: 24 }
+      - name: install the guards
+        run: |
+          npm install -g @megapixel99/didrun
+          npm install -g zerocase
+
+      # This step used to be `grep -q 'COMPLETE'`, which is the exact hole `didrun` was
+      # written about: the harness prints `COMPLETE : 0 positions scored` for a corpus it
+      # scored nothing on, and the grep is satisfied by it. Reading the count instead means
+      # the line has to carry a real number. The README also points people at the
+      # re-ranking measurement, so that has to be there -- either with numbers or with the
+      # reason it will not print any. Both predicates must hold; `didrun` uses `every`.
       - name: the harness runs and reaches a verdict
         run: |
-          node tools/measure.mjs ./src ./tools ./test | tee /tmp/m.txt
-          grep -q 'COMPLETE' /tmp/m.txt
-          # The README points people at the re-ranking measurement, so it has to be there
-          # -- either with numbers or with the reason it will not print any.
-          grep -q 'RE-RANKING' /tmp/m.txt
+          didrun --expect-count 'COMPLETE : ([0-9]+) positions scored' --min 50 \
+                 --expect 'RE-RANKING' \
+                 -- node tools/measure.mjs ./src ./tools ./test
 
       # The lexer never cared what language it read; the defaults did. This asserts the
       # default is still JavaScript-only, so no number in the README quietly changes.
@@ -47,9 +73,15 @@ jobs:
           fi
           node bin/lexindex.js /tmp/langcheck --lang python --stats | grep -q 'files    : 1'
 
+      # The floor is read straight out of the document the harness wrote, at the dotted
+      # path that holds it, and `zerocase` requires that document to have been written by
+      # THIS run: a `/tmp/m.json` left from an earlier step parses beautifully and proves
+      # nothing. The two assertions below are about the document's SHAPE, which is a
+      # different question and stays where it is.
       - name: --json emits one object and no prose beside it
         run: |
-          node tools/measure.mjs --json ./src ./tools ./test > /tmp/m.json
+          zerocase --json /tmp/m.json:positions.scored --min 50 \
+            -- bash -c 'node tools/measure.mjs --json ./src ./tools ./test > /tmp/m.json'
           node -e '
             const o = JSON.parse(require("fs").readFileSync("/tmp/m.json", "utf8"));
             if (typeof o.recital !== "number") throw new Error("no recital in the JSON");
