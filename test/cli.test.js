@@ -97,6 +97,20 @@ describe("collectFiles / buildIndex", () => {
     assert.equal(built.skipped, 1);
     assert.equal(built.files + built.skipped, built.candidates, "every candidate is accounted for");
   });
+
+  // A typo'd root used to vanish without a trace: the walk swallowed the readdir error
+  // and the corpus quietly got smaller. The library records the fact; whether it is
+  // fatal is the caller's call, and the CLI's answer is asserted in the exit-code suite.
+  test("a root that is not a readable directory lands on .missing, not on the floor", () => {
+    const ghost = path.join(dir, "no-such-subdir");
+    const files = collectFiles([dir, ghost]);
+    assert.equal(files.length, 3, "the readable root is still walked in full");
+    assert.deepEqual(files.missing, [ghost]);
+    // A file passed as a root is the same mistake: `<dir>...` means directories.
+    assert.deepEqual(collectFiles(path.join(dir, "alpha.js")).missing, [path.join(dir, "alpha.js")]);
+    assert.deepEqual(buildIndex(dir).missing, [], "a clean build reports a clean list");
+    assert.deepEqual(buildIndex([dir, ghost]).missing, [ghost]);
+  });
 });
 
 describe("updateIndexFile — a long-lived process keeping up with edits", () => {
@@ -285,6 +299,36 @@ describe("the CLI", () => {
     } finally {
       fs.rmSync(empty, { recursive: true, force: true });
     }
+  });
+
+  // Before this was asserted, a nonexistent directory produced the same generic message
+  // as an empty one, and a nonexistent directory NEXT TO a real one produced a smaller
+  // corpus and no message at all — numbers about different code, said confidently.
+  test("a directory that does not exist is refused by name", () => {
+    const ghost = path.join(dir, "no-such-subdir");
+    const alone = run([ghost, "--stats"]);
+    assert.equal(alone.status, 2);
+    assert.match(alone.stderr, new RegExp(`not a directory: .*no-such-subdir`));
+
+    const besideARealOne = run([dir, ghost, "--stats"]);
+    assert.equal(besideARealOne.status, 2, "a real root does not excuse a missing one");
+    assert.match(besideARealOne.stderr, /not a directory/);
+  });
+
+  // The mistake that motivated all of this: zsh does not split an unquoted $var, so
+  // `lexindex $DIRS` hands over ONE argument holding every path. The generic message
+  // made that indistinguishable from an empty repository; this hint names it.
+  test("several existing paths fused into one argument get the unsplit-variable hint", () => {
+    const fused = run([`${dir} ${dir}`, "--stats"]);
+    assert.equal(fused.status, 2);
+    assert.match(fused.stderr, /2 paths that all exist/);
+    assert.match(fused.stderr, /own argument/);
+
+    // No hint when the pieces do not exist — then it is just a path with a space in it.
+    const spacey = run([`${dir}/does not exist`, "--stats"]);
+    assert.equal(spacey.status, 2);
+    assert.match(spacey.stderr, /not a directory/);
+    assert.doesNotMatch(spacey.stderr, /paths that all exist/);
   });
 
   test("an unknown option is refused instead of being treated as a directory", () => {
