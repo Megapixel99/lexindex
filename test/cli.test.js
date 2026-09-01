@@ -931,6 +931,27 @@ describe("--line retrieves a whole line, or says it cannot", () => {
     assert.equal(JSON.parse(miss.stdout).line, null, "a miss is an explicit null, not an omitted key");
   });
 
+  test("it reports how confident it is, not just what it found", () => {
+    const r = run([dir, "--stdin", "--line"], seen);
+    assert.match(r.stderr, /\d+% confident/, `expected a confidence share, got ${r.stderr}`);
+  });
+
+  test("--min-confidence 1 withholds a line it would otherwise have offered", () => {
+    // The two refusals are different and say so: this context HAS been seen, it is just
+    // not decided enough. Reporting "has not been seen" here would be a lie.
+    const strict = run([dir, "--stdin", "--line", "--min-confidence", "1.01"], seen);
+    assert.equal(strict.status, 1, "nothing clears the bar, so nothing is offered");
+    assert.equal(strict.stdout.trim(), "", "nothing may reach stdout when there is no answer");
+    assert.match(strict.stderr, /nothing here is likely enough/);
+    assert.doesNotMatch(strict.stderr, /has not been seen/, "it HAS been seen; only the bar failed");
+  });
+
+  test("--min-confidence 0 answers wherever there is anything at all", () => {
+    const loose = run([dir, "--stdin", "--line", "--min-confidence", "0"], seen);
+    assert.equal(loose.status, 0, loose.stderr);
+    assert.equal(loose.stdout.trim(), "export const widgetCount = 2;");
+  });
+
   test("the line table is not built unless it is asked for", () => {
     // It is a second pass over the same text; nothing that only completes tokens pays.
     const plain = run([dir, "--stdin", "--json"], "renderWidget(");

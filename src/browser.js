@@ -23,7 +23,14 @@
 export { lex, isWord, splitAtCursor, trailingWordStart } from "./lex.js";
 export { CountModel, recitalBand } from "./count-model.js";
 // No I/O: the line table is handed text, never a path, so the browser build keeps it.
-export { LineIndex, LINE_CONTEXT, MAX_PER_CONTEXT } from "./line-index.js";
+export {
+  LineIndex,
+  localIndex,
+  LINE_WIDTHS,
+  LINE_CONTEXT,
+  MAX_PER_CONTEXT,
+  DEFAULT_MIN_CONFIDENCE,
+} from "./line-index.js";
 export { CacheModel } from "./cache-model.js";
 export { Completer } from "./completer.js";
 export { BufferSession } from "./session.js";

@@ -18,6 +18,7 @@ import { topWords } from "../src/identifiers.js";
 import { lex } from "../src/lex.js";
 import { recitalBand as band } from "../src/count-model.js";
 import { resolveLanguages, LANGUAGE_NAMES } from "../src/languages.js";
+import { localIndex, DEFAULT_MIN_CONFIDENCE } from "../src/line-index.js";
 
 const argv = process.argv.slice(2);
 const dirs = [];
@@ -27,6 +28,7 @@ let stats = false;
 let json = false;
 let wordsOnly = false;
 let lineMode = false;
+let minConfidence = DEFAULT_MIN_CONFIDENCE;
 let useStdin = false;
 let beta = 0.5;
 let recitalOf = null;
@@ -52,7 +54,9 @@ function usage() {
                                   a measurement stays a fair one
     --line                        the whole NEXT LINE, retrieved from the corpus with
                                   the file and line it came from; exits 1 and says so
-                                  when this context has not been seen
+                                  when nothing is likely enough to offer
+    --min-confidence <n>          share of the score the best line must hold to be
+                                  offered at all, default 0.3; 0 always answers
     --stats                       report what the index holds
     --recital <file>              just the recital rate of <file> against the index
   index
@@ -100,6 +104,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "--stats") stats = true;
   else if (a === "--words") wordsOnly = true;
   else if (a === "--line") lineMode = true;
+  else if (a === "--min-confidence") minConfidence = Number(value(a, i++));
   else if (a === "--json") json = true;
   else if (a === "--stdin") useStdin = true;
   else if (a === "--skip-generated") skipGenerated = true;
@@ -349,19 +354,33 @@ const before = text.slice(0, offset);
 // has not been seen the honest answer is to say nothing, so this exits 1 rather than
 // offering something the corpus never contained.
 if (lineMode) {
-  const hit = built.lines.lookup(before);
+  // The buffer above the cursor is a corpus too, and the most useful one: indexing it
+  // alongside the repository is worth ~4.8 points of accuracy, because code repeats
+  // locally far more than it repeats globally.
+  const local = before.trim() ? localIndex(before) : null;
+  const hit = built.lines.lookup(before, { local, minConfidence });
   if (json) {
     console.log(JSON.stringify({ line: hit, recital, band: band(recital), offset, index: indexReport }));
     process.exit(hit ? 0 : 1);
   }
   console.error(`(recital ${(recital * 100).toFixed(1)}% \u2014 ${band(recital)})`);
   if (!hit) {
-    console.error("lexindex: this context has not been seen \u2014 no line to retrieve");
+    // Two ways to have no answer, and they mean different things to whoever is reading.
+    const near = built.lines.candidates(before, { local });
+    console.error(
+      near.length
+        ? `lexindex: nothing here is likely enough \u2014 best of ${near.length} candidate(s) holds ` +
+          `${(near[0].confidence * 100).toFixed(0)}% of the score, below --min-confidence ${minConfidence}`
+        : "lexindex: this context has not been seen \u2014 no line to retrieve",
+    );
     process.exit(1);
   }
   console.log(hit.text);
   const others = hit.alternatives > 1 ? `, ${hit.alternatives - 1} other(s) here` : "";
-  console.error(`  ${hit.file}:${hit.line} \u2014 seen ${hit.count} of ${hit.total} time(s)${others}`);
+  console.error(
+    `  ${hit.file}:${hit.line} \u2014 ${(hit.confidence * 100).toFixed(0)}% confident, ` +
+      `seen ${hit.count} time(s)${others}`,
+  );
   process.exit(0);
 }
 

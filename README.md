@@ -424,8 +424,8 @@ next*, but *what line came next, last time you were here*.
 
 ```
 $ lexindex ./src --stdin --line
-schema: { type: 'string' },
-  src/routes/api/v1/graphQL/get.js:14 - seen 10 of 34 time(s), 15 other(s) here
+type: 'integer',
+  src/classes/openapi.js:29 - 60% confident, seen 6 time(s), 4 other(s) here
 ```
 
 It does not generate. Running the token completer on its own output was measured over 883
@@ -442,27 +442,80 @@ Ten tokens is roughly a line, so a generated line is right about three times in 
 That is not a tuning problem: an order-5 model conditions on four tokens, and after a few
 self-generated steps the context is mostly its own output.
 
-So `--line` remembers instead. For each four-token context it keeps the lines that actually
-followed it in the corpus and returns the most frequent, **with the file and line it came
-from**. On the same corpus:
+So `--line` remembers instead. It keeps the lines that actually followed a context and
+returns the most likely, **with the file and line it came from**.
 
-- it offers a line on **53.8%** of line positions
-- when it offers one, it is exact **24.7%** of the time
+### How it ranks, and how that was decided
 
-**When the context has not been seen it says so and exits 1.** That refusal is the point.
-An index over your own repository must never hand back code your repository does not
-contain, and the provenance is there so a suggestion is checkable rather than merely
-convincing.
+Measured on a held-out split - 10 repositories indexed, 5 disjoint ones predicted, 5,820
+line positions - then replicated with the two halves swapped (14,033 positions). Held to
+the coverage of a plain single-width lookup, the ranking below is exact **48.7%** and
+**50.1%** of the time on the two splits, against **40.2%** and **41.8%**, and agrees with
+9.0 points more of the true line's prefix on both.
 
-One honest caveat about what it is good at. On the corpus above, the exact hits were almost
-all declarative boilerplate - `schema: { type: 'string' },`, `in: 'query',`. A high hit rate
-here means *you have written this before*, which is a fact about the corpus and not always a
+Every number in this section is re-derivable on your own code, and the script refuses to
+run if the two sides of the split overlap:
+
+```sh
+npm run measure:line -- ./service-a/src ./service-b/src -- ./service-c/src
+```
+
+Two things earned their place:
+
+- **Every context width votes, rather than the longest one that matches.** Widths of four,
+  five and six tokens each contribute a candidate's share of what followed them, weighted
+  by width. Backing off to whichever is longest throws away the fact that the shorter
+  contexts agreed.
+- **The file you are editing is a corpus too.** The lines above your cursor are worth 3.1
+  and 6.4 points of overall accuracy on the two splits. Code repeats locally far more than
+  it repeats globally, and your unsaved buffer is the one corpus the index never has.
+
+Three things did not, written down so nobody has to rediscover them:
+
+- **Templating identifiers into holes** (`const ID = NUM;`) lifts coverage to 97% and costs
+  6.2 points of accuracy. Contexts that match only once their names are erased are usually
+  not the same context.
+- **Recency weighting** on the local model does nothing at any half-life tried (20, 60 and
+  200 lines all landed inside the noise).
+- **Matching indentation** actively hurts, 28.2% against 40.5% - and that was measured with
+  oracle access to the true line's indent, so no better estimate of it will help. A
+  candidate's indentation is a fact about the file it came from, not the one it is going to.
+
+### Two ways to have no answer
+
+**A context that has never been seen is refused outright, and exits 1.** That refusal is
+the point: an index over your own repository must never hand back code your repository does
+not contain, and the provenance is there so a suggestion is checkable rather than merely
+convincing. Narrow contexts were left out of the ranking to protect it - a two-token tail is
+usually punctuation like `);`, which matches nearly any line ever written, and including it
+would take the share of positions where this can honestly say "never seen" from 23-28% down
+to about 6%.
+
+**A context whose continuations disagree is also withheld**, and says which it was:
+
+```
+$ lexindex ./src --stdin --line
+lexindex: nothing here is likely enough - best of 7 candidate(s) holds 22% of the score,
+          below --min-confidence 0.3
+```
+
+`--min-confidence` is the dial. At the default of `0.3` it answers on 65.2% and 54.8% of
+positions across the two splits and is exact on 53.6% and 61.1%. At `0` it answers on 76.6%
+and 71.7% and is exact on 46.4% and 48.1%. It prints one line for a human to accept, so a
+wrong line costs more than a missing one - but if you would rather see everything, `0` is
+there.
+
+One honest caveat about what it is good at. The exact hits are largely declarative
+boilerplate - `schema: { type: 'string' },`, `in: 'query',`. A high hit rate here means
+*you have written this before*, which is a fact about your corpus and not always a
 compliment to it.
 
 The table is opt-in: it is a second pass over the same text and costs memory in proportion
 to how much the corpus repeats, so nothing that only completes tokens pays for it. In the
 API it is `buildIndex(dirs, { lineIndex: true })`, and the result carries a `lines` table
-with `lookup(textBefore)`.
+with `lookup(textBefore, { local, minConfidence })` and `candidates(textBefore, { local })`
+for a caller that would rather offer a list - the right line is in the top three about 40%
+of the time. Build the `local` model with `localIndex(textAboveCursor)`.
 
 ## In your editor
 
