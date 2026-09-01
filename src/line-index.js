@@ -22,23 +22,31 @@
  *
  * ## How the ranking was chosen
  *
- * Measured on a held-out split — 10 repositories indexed, 5 disjoint ones predicted,
- * 5,820 line positions — and replicated with the two halves swapped (14,033 positions).
- * Both arms run this class: the earlier behaviour is exactly `{widths: [4]}` with no local
- * model and no floor. Held to that arm's own coverage, this ranking is exact 48.7% and
- * 50.1% of the time on the two splits against 40.2% and 41.8%, and agrees with a longer
- * prefix of the true line by 9.0 points on both.
+ * Measured on a corpus anybody can clone, because a number whose corpus cannot be fetched
+ * cannot be checked: nine sibling middleware packages from the express family indexed and
+ * two disjoint ones predicted (2,955 positions), then the halves swapped (5,134). Both arms
+ * run this class — the earlier behaviour is exactly `{widths: [4]}` with no local model and
+ * no floor — and coverage is held fixed, because "answers more often" is not "is right more
+ * often". At the old arm's own coverage this ranking is exact 30.1% and 33.6% against 15.9%
+ * and 19.3%, and agrees with about 16 points more of the true line's prefix.
  *
- * `npm run measure:line -- <corpus-dir>... -- <held-out-dir>...` re-derives all of it.
+ * Coverage is what a corpus decides. Here the context has never been seen at 63% of line
+ * positions; on a private estate of fifteen services generated from one template that fell
+ * to a quarter, and the same comparison ran +8.6 rather than +14. The more a codebase
+ * repeats itself the more often this answers, and the less each answer is worth.
+ *
+ * `npm run measure:line -- <corpus-dir>... -- <held-out-dir>...` re-derives all of it, and
+ * refuses to run when the two sides of the split overlap.
  *
  * Two things earned their place:
  *
  * 1. **Every width at once, not the longest that matches.** Backing off from a six-token
  *    context to a five- to a four- discards the evidence that the shorter contexts agreed.
  *    Summing a candidate's share across all widths, weighted by width, beats backoff.
- * 2. **The file being edited is a corpus too.** Lines above the cursor are worth 3.1 and
- *    6.4 points of overall accuracy on the two splits — code repeats locally far more than
- *    it repeats globally, and the buffer is the one corpus the index never has. They are
+ * 2. **The file being edited is a corpus too.** Lines above the cursor are worth 4.3 and
+ *    4.0 points of overall accuracy, and lift coverage from 19% to 30% — code repeats
+ *    locally far more than globally, and the buffer is the one corpus the index never has,
+ *    which counts for most on a corpus that repeats itself least. They are
  *    weighted *equally* with the repository: boosting them above it was measured at
  *    1 > 2 > 3 > 6 monotonically, so there is no knob here.
  *
@@ -69,13 +77,13 @@ import { lex } from "./lex.js";
  * strong evidence and a four-token one is ordinary evidence, and the scoring wants both
  * rather than only whichever happens to be longest.
  *
- * Narrower widths were measured and dropped. At matched coverage, adding widths 2 and 3
- * moves exactness by less than a point in either direction across two splits (53.3/53.9
- * against 53.9/52.5) and costs something that matters more: a two-token tail is usually
- * punctuation like `) ;`, which matches nearly any line ever written. Including it takes
- * the share of positions where this index can honestly say it has never seen the context
- * from 23-28% down to about 6%. A refusal that almost never fires is not a refusal.
- * Widening past six was also measured and does nothing.
+ * Narrower widths were measured and dropped. A two-token tail is usually punctuation like
+ * `) ;`, which matches nearly any line ever written, so including widths 2 and 3 takes the
+ * share of positions where this index can honestly say it has never seen the context from
+ * 63-64% down to 26-27%. A refusal that almost never fires is not a refusal. That was the
+ * whole of the argument on a private estate, where exactness moved less than a point either
+ * way; on the public corpus above, dropping them also RAISES exactness (26.4% to 29.1%,
+ * 26.5% to 30.2%), so the trade has no cost to weigh. Widening past six does nothing.
  */
 export const LINE_WIDTHS = [4, 5, 6];
 
@@ -95,9 +103,9 @@ export const MAX_PER_CONTEXT = 16;
 /**
  * Share of the total score the best candidate must hold before it is offered at all.
  *
- * With no floor the ranking answers on 76.6% and 71.7% of positions across the two splits
- * and is exact on 46.4% and 48.1% of those. At 0.3 it answers on 65.2% and 54.8% and is
- * exact on 53.6% and 61.1%. That trade is the right one for this feature: it prints one
+ * With no floor the ranking answers on 37.2% and 35.8% of positions across the two splits
+ * and is exact on 23.8% and 25.6% of those. At 0.3 it answers on 30.4% and 30.1% and is
+ * exact on 29.1% and 30.2%. That trade is the right one for this feature: it prints one
  * line for a human to accept, so a wrong line costs more than a missing one, and the
  * candidates are still reachable through `candidates()` for a caller that wants a list.
  * Pass 0 to recover the coverage.

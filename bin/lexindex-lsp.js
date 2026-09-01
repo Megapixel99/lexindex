@@ -80,10 +80,10 @@ if (!Number.isFinite(minConfidence) || minConfidence < 0) minConfidence = DEFAUL
 /**
  * How many whole lines to offer at once.
  *
- * The right line is the top one about half the time it is offered and inside the top three
- * about 40% of all gated positions, so a short list is worth more than a single answer --
- * but the tail past three is where the wrong ones live, and this list sits above the token
- * suggestions. Three.
+ * The right line is the top one about 30% of the time it is offered and inside the top
+ * three about 35%, so a short list is worth more than a single answer -- but the tail past
+ * three is where the wrong ones live, and this list sits above the token suggestions.
+ * Three.
  */
 const LINE_ITEMS = 3;
 
@@ -396,15 +396,15 @@ function handle(msg) {
  *
  * - only at the start of a line, because the table answers "what line followed this
  *   context" and mid-identifier that is not the question being asked;
- * - only when the index actually holds this context, which on a held-out measurement was
- *   about three quarters of line positions and never invents the other quarter;
+ * - only when the index actually holds this context, which on a held-out public corpus was
+ *   about a third of line positions, and it never invents the other two thirds;
  * - only when the best candidate holds `minConfidence` of the score. A list the editor
  *   pops up unbidden is worse than no list, and this gate is the one the published
- *   numbers were measured through -- the right line is the top item about half the time
- *   it clears this bar, and inside the top three about 40% of all positions.
+ *   numbers were measured through -- the right line is the top item about 30% of the time
+ *   it clears this bar, and inside the top three about 35%.
  *
  * The buffer above the cursor is indexed alongside the repository. It is the one corpus
- * the server never has on disk, and on the measured splits it was worth 3.1 and 6.4
+ * the server never has on disk, and on the measured splits it was worth 4.3 and 4.0
  * points of accuracy -- code repeats locally far more than it repeats globally.
  */
 function lineSuggestions(before) {

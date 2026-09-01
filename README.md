@@ -447,18 +447,62 @@ returns the most likely, **with the file and line it came from**.
 
 ### How it ranks, and how that was decided
 
-Measured on a held-out split - 10 repositories indexed, 5 disjoint ones predicted, 5,820
-line positions - then replicated with the two halves swapped (14,033 positions). Held to
-the coverage of a plain single-width lookup, the ranking below is exact **48.7%** and
-**50.1%** of the time on the two splits, against **40.2%** and **41.8%**, and agrees with
-9.0 points more of the true line's prefix on both.
+Measured on a public corpus anybody can fetch, for the reason the language table above
+gives: a row nobody else can clone is a row nobody else can check. Nine sibling middleware
+packages from the express family are indexed and two disjoint ones predicted, then the two
+halves are swapped. Both arms run the shipped class — the arm labelled *before* is exactly
+`{widths: [4]}` with no local model and no floor — so this compares against the code rather
+than a description of it, and coverage is held fixed, because "answers more often" is not
+"is right more often".
 
-Every number in this section is re-derivable on your own code, and the script refuses to
-run if the two sides of the split overlap:
+| corpus | held out | positions | before | after, same coverage |
+|---|---|---|---|---|
+| 9 packages, 27 files | express, multer | 2,955 | 15.9% | **30.1%** |
+| express, multer | 9 packages, 27 files | 5,134 | 19.3% | **33.6%** |
+
++14.1 and +14.3 points of exactness, and +16.8 and +16.4 of prefix agreement. Reproduce it:
 
 ```sh
-npm run measure:line -- ./service-a/src ./service-b/src -- ./service-c/src
+for r in expressjs/body-parser expressjs/compression expressjs/cors expressjs/morgan \
+         expressjs/serve-static expressjs/session pillarjs/finalhandler pillarjs/router \
+         pillarjs/send expressjs/express expressjs/multer; do
+  git clone --depth 1 https://github.com/$r
+done
+
+npm run measure:line -- --exclude '/(test|tests|examples|benchmark|support)/' \
+  ./body-parser ./compression ./cors ./finalhandler ./morgan ./router ./send ./serve-static ./session \
+  -- ./express ./multer
 ```
+
+Cloned at HEAD on 2026-09-01: [body-parser `8d6ec0f`](https://github.com/expressjs/body-parser/tree/8d6ec0ff3c34ec3701e502bd582b345fd2846796),
+[compression `ae9b1ae`](https://github.com/expressjs/compression/tree/ae9b1ae1cb73433f71bf7aa8dd022f9146bbcdcf),
+[cors `5317ebe`](https://github.com/expressjs/cors/tree/5317ebe670db2aaebc1d496eb5d33493deefb3ed),
+[finalhandler `577bfbf`](https://github.com/pillarjs/finalhandler/tree/577bfbf00288166b5a069ff78cce60c26b81992f),
+[morgan `286b000`](https://github.com/expressjs/morgan/tree/286b000228cacba362bfa89791c6268663f86610),
+[router `bda4af3`](https://github.com/pillarjs/router/tree/bda4af36c1e66811717b13421579c63029ea2877),
+[send `092f3fc`](https://github.com/pillarjs/send/tree/092f3fc77f0e796519ac328c543c11cced8f2244),
+[serve-static `74be78a`](https://github.com/expressjs/serve-static/tree/74be78a8ffad679edfe135c457ce141114d96fcc),
+[session `96ebea4`](https://github.com/expressjs/session/tree/96ebea4b6cd805584fba04523773b1b918a836d7),
+[express `023767f`](https://github.com/expressjs/express/tree/023767fe9872e029271df1418f73401bff20ff40),
+[multer `a53296b`](https://github.com/expressjs/multer/tree/a53296bbd6d57349bcf56da3b2de5111e1c87c54).
+
+The script refuses to run if the two sides overlap: predicting lines of a file that is in
+the index measures only that a hash table works, and would report a number near 100%.
+
+**That `--exclude` is doing more work than it looks like.** 134 of express's 141 indexable
+files are tests and examples, and test code is far more templated than library code. Leave
+them in and the same eleven repositories answer on 64% of positions instead of 29%, and the
+same change is worth **+25.7** points instead of +14.1. Neither number is wrong; they are
+numbers about different code, which is why the command above is written out in full. Corpus
+choice is the largest free parameter here, exactly as it is in the language table.
+
+**Coverage is where a corpus shows itself.** On this public corpus the index has never seen
+the context at 63% of line positions and says so. On fifteen sibling services generated from
+one template — a private estate, so take the figure as illustration rather than evidence —
+that fell to 23-28%, and the same comparison ran +8.6 and +8.3 rather than +14. The more a
+codebase repeats itself, the more often this answers and the less each answer is worth. A
+high hit rate here means *you have written this before*, which is a fact about the corpus
+and not always a compliment to it.
 
 Two things earned their place:
 
@@ -466,8 +510,10 @@ Two things earned their place:
   five and six tokens each contribute a candidate's share of what followed them, weighted
   by width. Backing off to whichever is longest throws away the fact that the shorter
   contexts agreed.
-- **The file you are editing is a corpus too.** The lines above your cursor are worth 3.1
-  and 6.4 points of overall accuracy on the two splits. Code repeats locally far more than
+- **The file you are editing is a corpus too.** The lines above your cursor are worth 4.3
+  and 4.0 points of overall accuracy, and lift coverage from 19% to 30%: on a corpus that
+  repeats itself as little as this one, the buffer is proportionally more of what there is
+  to retrieve from. Code repeats locally far more than
   it repeats globally, and your unsaved buffer is the one corpus the index never has.
 
 Three things did not, written down so nobody has to rediscover them:
@@ -488,8 +534,10 @@ the point: an index over your own repository must never hand back code your repo
 not contain, and the provenance is there so a suggestion is checkable rather than merely
 convincing. Narrow contexts were left out of the ranking to protect it - a two-token tail is
 usually punctuation like `);`, which matches nearly any line ever written, and including it
-would take the share of positions where this can honestly say "never seen" from 23-28% down
-to about 6%.
+would take the share of positions where this can honestly say "never seen" from 63-64% down
+to 26-27%. On the private estate that was the whole of the argument, since exactness there
+moved less than a point either way; on the public corpus dropping them also *raises* it,
+26.4% to 29.1% and 26.5% to 30.2%, so the trade turns out to have no cost to weigh.
 
 **A context whose continuations disagree is also withheld**, and says which it was:
 
@@ -499,11 +547,11 @@ lexindex: nothing here is likely enough - best of 7 candidate(s) holds 22% of th
           below --min-confidence 0.3
 ```
 
-`--min-confidence` is the dial. At the default of `0.3` it answers on 65.2% and 54.8% of
-positions across the two splits and is exact on 53.6% and 61.1%. At `0` it answers on 76.6%
-and 71.7% and is exact on 46.4% and 48.1%. It prints one line for a human to accept, so a
-wrong line costs more than a missing one - but if you would rather see everything, `0` is
-there.
+`--min-confidence` is the dial. On the public corpus above, at the default of `0.3` it
+answers on 30.4% and 30.1% of positions across the two splits and is exact on 29.1% and
+30.2%; at `0` it answers on 37.2% and 35.8% and is exact on 23.8% and 25.6%. It prints one
+line for a human to accept, so a wrong line costs more than a missing one - but if you would
+rather see everything, `0` is there.
 
 One honest caveat about what it is good at. The exact hits are largely declarative
 boilerplate - `schema: { type: 'string' },`, `in: 'query',`. A high hit rate here means
@@ -514,8 +562,8 @@ The table is opt-in: it is a second pass over the same text and costs memory in 
 to how much the corpus repeats, so nothing that only completes tokens pays for it. In the
 API it is `buildIndex(dirs, { lineIndex: true })`, and the result carries a `lines` table
 with `lookup(textBefore, { local, minConfidence })` and `candidates(textBefore, { local })`
-for a caller that would rather offer a list - the right line is in the top three about 40%
-of the time. Build the `local` model with `localIndex(textAboveCursor)`.
+for a caller that would rather offer a list - the right line is the top one about 30% of the
+time it answers, and inside the top three about 35%. Build the `local` model with `localIndex(textAboveCursor)`.
 
 ## In your editor
 
@@ -588,16 +636,16 @@ Three things it will not do, each of which is a way of declining to guess:
   answers "what line followed this context"; half way through `renderWidg` that is not the
   question, and a whole line there would replace what is already typed.
 - **Only when the context has been seen** — on a held-out measurement it stays silent on
-  about a quarter of line positions rather than inventing anything for them.
+  roughly two thirds of line positions on a public corpus, and about a quarter on a
+  heavily templated one, rather than inventing anything for them.
 - **Only when the best candidate clears `--min-confidence`** (0.3 by default). A list an
   editor pops up unbidden is worse than no list.
 
-At most three are offered. The right line is the top one about half the time it clears the
-bar and inside the top three about 40% of all positions; past three is where the wrong ones
-live.
+At most three are offered. The right line is the top one about 30% of the time it clears the
+bar and inside the top three about 35%; past three is where the wrong ones live.
 
 The buffer above your cursor is indexed alongside the repository — the one corpus the
-server never has on disk, and worth 3.1 and 6.4 points of accuracy on the two measured
+server never has on disk, and worth 4.3 and 4.0 points of accuracy on the two measured
 splits. Only the last 40 lines, so this is rebuilt per request without re-reading the file.
 
 `--no-line` turns the whole thing off, which also stops the line table being built: it costs

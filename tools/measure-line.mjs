@@ -2,7 +2,7 @@
 /**
  * Re-derive the `--line` numbers quoted in the README, on your own code.
  *
- * usage: node tools/measure-line.mjs <corpus-dir>... -- <held-out-dir>...
+ * usage: node tools/measure-line.mjs [--exclude <regex>] <corpus-dir>... -- <held-out-dir>...
  *
  * The two sides must be DISJOINT. Predicting lines of a file that is in the index measures
  * nothing except that a hash table works: every context resolves to the line that follows
@@ -26,6 +26,33 @@ import { lex } from "../src/lex.js";
 import { LineIndex, localIndexFor, LINE_WIDTHS, LOCAL_TAIL_LINES, DEFAULT_MIN_CONFIDENCE } from "../src/line-index.js";
 
 const argv = process.argv.slice(2);
+
+/**
+ * `--exclude`, the same escape hatch the CLI has and for a sharper reason here.
+ *
+ * Corpus choice is the largest free parameter in a completion measurement, and a
+ * repository's tests are usually far more templated than its library code -- in the
+ * express family below, 134 of express's 141 indexed files are tests or examples. Leaving
+ * them in does not produce a wrong number, it produces a number about different code, so
+ * the flag exists to make the published command exact rather than approximately right.
+ */
+let excludeRe = null;
+const flag = argv.indexOf("--exclude");
+if (flag !== -1) {
+  const pattern = argv[flag + 1];
+  if (pattern === undefined) {
+    console.error("measure-line: --exclude wants a regular expression");
+    process.exit(2);
+  }
+  try {
+    excludeRe = new RegExp(pattern);
+  } catch (e) {
+    console.error(`measure-line: --exclude is not a valid regular expression: ${e.message}`);
+    process.exit(2);
+  }
+  argv.splice(flag, 2);
+}
+
 const split = argv.indexOf("--");
 if (split === -1 || split === 0 || split === argv.length - 1) {
   console.error("usage: node tools/measure-line.mjs <corpus-dir>... -- <held-out-dir>...");
@@ -48,6 +75,7 @@ for (const c of corpusDirs) {
 
 const read = (dirs) =>
   collectFiles(dirs)
+    .filter((p) => !excludeRe || !excludeRe.test(p))
     .map((p) => {
       try {
         return { path: p, text: fs.readFileSync(p, "utf8") };
@@ -127,6 +155,7 @@ if (corpus.length === 0 || evalFiles.length === 0) {
 
 console.log(`widths [${LINE_WIDTHS}]  default floor ${DEFAULT_MIN_CONFIDENCE}`);
 console.log(`corpus ${corpus.length} files | held out ${evalFiles.length} files`);
+if (excludeRe) console.log(`excluding ${excludeRe}`);
 
 const before = measure(corpus, evalFiles, { old: true });
 console.log(`${before.n} line positions\n`);

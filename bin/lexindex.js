@@ -355,7 +355,7 @@ const before = text.slice(0, offset);
 // offering something the corpus never contained.
 if (lineMode) {
   // The buffer above the cursor is a corpus too, and the most useful one: indexing it
-  // alongside the repository is worth 3.1 and 6.4 points of accuracy on the two measured
+  // alongside the repository is worth 4.3 and 4.0 points of accuracy on the two measured
   // splits, because code repeats locally far more than it repeats globally. The bounded
   // tail lives in line-index.js so this and the language server cannot disagree about it.
   const local = localIndexFor(before);
