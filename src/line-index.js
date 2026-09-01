@@ -260,12 +260,56 @@ export class LineIndex {
 }
 
 /**
+ * How many lines above the cursor the local model reads.
+ *
+ * Bounded for two reasons. A language server rebuilds this on every completion request,
+ * and an unbounded one would re-lex the whole file per keystroke on exactly the large
+ * files where that hurts. And this is the window every published number was measured
+ * through, so a caller that used a different one would be reporting a different feature.
+ * Forty lines is far more than the six tokens the widest context can reach through; the
+ * slack is there because blank and comment lines do not count toward a context.
+ */
+export const LOCAL_TAIL_LINES = 40;
+
+/**
  * A local model over the text above the cursor.
  *
  * The buffer being edited is not in the corpus and is the most useful single source of
- * candidates, so the caller builds one of these per lookup (or per keystroke) and passes
- * it in. It is the same class: a corpus of one file.
+ * candidates, so the caller builds one of these per lookup and passes it in. It is the
+ * same class: a corpus of one file.
  */
 export function localIndex(text, file = "<buffer>") {
   return new LineIndex().addFile(file, text).finalize();
+}
+
+/**
+ * The local model for a cursor, over the bounded tail — what every caller should use.
+ *
+ * Extracted so the CLI, the language server and `tools/measure-line.mjs` cannot quietly
+ * disagree about what "the buffer above the cursor" means. They did: the CLI read the
+ * whole of stdin while the measurement read the last forty lines, which is a small
+ * difference that would have made the published numbers describe a slightly different
+ * program than the one that ships.
+ *
+ * @param {string} textBefore everything above the cursor
+ */
+export function localIndexFor(textBefore) {
+  if (!textBefore || !textBefore.trim()) return null;
+  const lines = textBefore.split("\n");
+  return localIndex(lines.slice(-LOCAL_TAIL_LINES).join("\n"));
+}
+
+/**
+ * Is the cursor at the start of a line, where a whole-line suggestion means anything?
+ *
+ * The table answers "what line came after this context", so it is only the right answer
+ * where a new line is actually beginning. Half way through `renderWidg|` the useful
+ * suggestion is a token, and offering a whole line there would replace what is already
+ * typed with something that does not continue it.
+ *
+ * @param {string} textBefore everything above the cursor
+ */
+export function atLineStart(textBefore) {
+  const nl = textBefore.lastIndexOf("\n");
+  return textBefore.slice(nl + 1).trim() === "";
 }

@@ -561,7 +561,51 @@ language-servers = ["typescript-language-server", "lexindex"]
 
 Running it alongside a real language server is the intended arrangement wherever one exists, and the reason is the first entry in *What it cannot do*: this thing is not type-aware, has no idea what is in scope, and loses outright at a `foo.` position. What it contributes is the frequency signal the others have no notion of. Most editors merge completions from several servers, so you get both.
 
-`initializationOptions` takes `lang`, `beta`, `k` and `dirs`, matching the CLI's flags.
+### Whole lines, at a line start
+
+At the start of a line the server also offers the **whole next line**, retrieved from the
+index, each item carrying the file and line it came from:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ },                              lexindex line · 63%          │
+│ format: 'nullable',             lexindex line · 18%          │
+│ format: 'date-time',            lexindex line · 10%          │
+│ properties                      lexindex                     │
+│ format                          lexindex                     │
+└──────────────────────────────────────────────────────────────┘
+  classes/openapi.js:34 — seen 85 time(s)
+```
+
+This is the one place a server with no idea what is in scope has something a type-aware one
+does not: it has read the repository, and it can say *this is what followed here the last
+eighty-five times*. Lines sort above the tokens, and the provenance is in the documentation
+panel so a suggestion is checkable rather than merely convincing.
+
+Three things it will not do, each of which is a way of declining to guess:
+
+- **Only at a line start** (leading whitespace is fine, a half-typed word is not). The table
+  answers "what line followed this context"; half way through `renderWidg` that is not the
+  question, and a whole line there would replace what is already typed.
+- **Only when the context has been seen** — on a held-out measurement it stays silent on
+  about a quarter of line positions rather than inventing anything for them.
+- **Only when the best candidate clears `--min-confidence`** (0.3 by default). A list an
+  editor pops up unbidden is worse than no list.
+
+At most three are offered. The right line is the top one about half the time it clears the
+bar and inside the top three about 40% of all positions; past three is where the wrong ones
+live.
+
+The buffer above your cursor is indexed alongside the repository — the one corpus the
+server never has on disk, and worth 3.1 and 6.4 points of accuracy on the two measured
+splits. Only the last 40 lines, so this is rebuilt per request without re-reading the file.
+
+`--no-line` turns the whole thing off, which also stops the line table being built: it costs
+about 4 MB and a tenth of the build time on a 163-file, 75,000-token corpus. `--min-confidence`
+takes the floor.
+
+`initializationOptions` takes `lang`, `beta`, `k`, `dirs`, `line` and `minConfidence`,
+matching the CLI's flags.
 
 Two details are worth knowing because they are decisions rather than defaults. Completions are identifier-shaped only: the measurements score punctuation because a fair benchmark has to, but a popup offering `;` is noise, and aggregate top-1 is mostly punctuation for every engine including this one. And every item carries a `sortText`, because an editor that re-sorts alphabetically throws away the only thing this server contributes.
 

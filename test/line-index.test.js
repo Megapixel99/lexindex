@@ -14,6 +14,9 @@ import assert from "node:assert/strict";
 import {
   LineIndex,
   localIndex,
+  localIndexFor,
+  atLineStart,
+  LOCAL_TAIL_LINES,
   LINE_WIDTHS,
   LINE_CONTEXT,
   MAX_PER_CONTEXT,
@@ -196,5 +199,49 @@ describe("localIndex — the buffer is a corpus too", () => {
     const both = corpus.candidates(buffer, { local: localIndex(buffer) }).map((c) => c.text);
     assert.ok(both.includes("corpusLine();"), "the corpus still has a say");
     assert.ok(both.includes("bufferLine();"), "so does the buffer");
+  });
+});
+
+describe("atLineStart — where a whole line is the question being asked", () => {
+  test("an empty buffer, and the position just after a newline, are line starts", () => {
+    assert.equal(atLineStart(""), true);
+    assert.equal(atLineStart("const x = 1;\n"), true);
+  });
+
+  test("whitespace after the newline is still a line start", () => {
+    // An editor puts the cursor after the indentation it inserted; that is where a line
+    // suggestion belongs, and the stored text is trimmed so it lands correctly.
+    assert.equal(atLineStart("function f() {\n  "), true);
+    assert.equal(atLineStart("function f() {\n\t\t"), true);
+  });
+
+  test("a half-typed word is not a line start", () => {
+    // The guard that stops a whole line replacing what is already typed.
+    assert.equal(atLineStart("const x = 1;\nrenderWidg"), false);
+    assert.equal(atLineStart("renderWidg"), false);
+  });
+
+  test("a complete statement with the cursor at its end is not a line start", () => {
+    assert.equal(atLineStart("const x = 1;"), false);
+  });
+});
+
+describe("localIndexFor — one definition of \"the buffer above the cursor\"", () => {
+  test("empty or blank text has no local model rather than an empty one", () => {
+    assert.equal(localIndexFor(""), null);
+    assert.equal(localIndexFor("   \n\n  "), null);
+  });
+
+  test("it reads only the last LOCAL_TAIL_LINES lines", () => {
+    // The bound is why a language server can rebuild this per completion request. A line
+    // beyond the window must not be retrievable, or the CLI and the server would answer
+    // differently from the tool that measured them.
+    const far = "const marker = ancient();\nveryOldLine();\n";
+    const filler = Array.from({ length: LOCAL_TAIL_LINES + 5 }, (_, i) => `filler${i}();`).join("\n");
+    const ix = localIndexFor(far + filler + "\n");
+    assert.equal(ix.lookup("const marker = ancient();", { minConfidence: 0 }), null, "beyond the window");
+
+    const near = localIndexFor("const marker = ancient();\nveryOldLine();\nfiller();\n");
+    assert.equal(near.lookup("const marker = ancient();", { minConfidence: 0 }).text, "veryOldLine();");
   });
 });

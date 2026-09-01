@@ -23,7 +23,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { collectFiles } from "../src/build.js";
 import { lex } from "../src/lex.js";
-import { LineIndex, localIndex, LINE_WIDTHS, DEFAULT_MIN_CONFIDENCE } from "../src/line-index.js";
+import { LineIndex, localIndexFor, LINE_WIDTHS, LOCAL_TAIL_LINES, DEFAULT_MIN_CONFIDENCE } from "../src/line-index.js";
 
 const argv = process.argv.slice(2);
 const split = argv.indexOf("--");
@@ -76,8 +76,8 @@ function prefixAgreement(pred, truth) {
   return truth.length ? k / truth.length : 0;
 }
 
-/** Only the tail of the buffer can match anything, and it keeps this loop linear. */
-const TAIL = 40;
+/** The window the shipped callers read; imported so this cannot measure a different one. */
+const TAIL = LOCAL_TAIL_LINES;
 
 function measure(corpus, evalFiles, { old = false, threshold = DEFAULT_MIN_CONFIDENCE } = {}) {
   const ix = new LineIndex(old ? { widths: [4] } : {});
@@ -93,7 +93,7 @@ function measure(corpus, evalFiles, { old = false, threshold = DEFAULT_MIN_CONFI
         n++;
         const above = buf.join("\n");
         // The buffer above the cursor only — never the line being predicted, or any after.
-        const local = old ? null : localIndex(buf.slice(-TAIL).join("\n"));
+        const local = old ? null : localIndexFor(buf.join("\n"));
         const ranked = ix.candidates(above, { local });
         const hit = ix.lookup(above, { local, minConfidence: old ? 0 : threshold });
         if (hit) {

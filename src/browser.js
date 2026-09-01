@@ -26,6 +26,9 @@ export { CountModel, recitalBand } from "./count-model.js";
 export {
   LineIndex,
   localIndex,
+  localIndexFor,
+  atLineStart,
+  LOCAL_TAIL_LINES,
   LINE_WIDTHS,
   LINE_CONTEXT,
   MAX_PER_CONTEXT,

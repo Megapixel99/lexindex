@@ -18,7 +18,7 @@ import { topWords } from "../src/identifiers.js";
 import { lex } from "../src/lex.js";
 import { recitalBand as band } from "../src/count-model.js";
 import { resolveLanguages, LANGUAGE_NAMES } from "../src/languages.js";
-import { localIndex, DEFAULT_MIN_CONFIDENCE } from "../src/line-index.js";
+import { localIndexFor, DEFAULT_MIN_CONFIDENCE } from "../src/line-index.js";
 
 const argv = process.argv.slice(2);
 const dirs = [];
@@ -355,9 +355,10 @@ const before = text.slice(0, offset);
 // offering something the corpus never contained.
 if (lineMode) {
   // The buffer above the cursor is a corpus too, and the most useful one: indexing it
-  // alongside the repository is worth ~4.8 points of accuracy, because code repeats
-  // locally far more than it repeats globally.
-  const local = before.trim() ? localIndex(before) : null;
+  // alongside the repository is worth 3.1 and 6.4 points of accuracy on the two measured
+  // splits, because code repeats locally far more than it repeats globally. The bounded
+  // tail lives in line-index.js so this and the language server cannot disagree about it.
+  const local = localIndexFor(before);
   const hit = built.lines.lookup(before, { local, minConfidence });
   if (json) {
     console.log(JSON.stringify({ line: hit, recital, band: band(recital), offset, index: indexReport }));

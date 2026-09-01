@@ -188,7 +188,9 @@ describe("the language server", () => {
     });
     const sorts = r.result.items.map((i) => i.sortText);
     assert.deepEqual(sorts, [...sorts].sort(), "sortText must be ascending in our order");
-    assert.deepEqual(sorts, sorts.map((_, n) => String(n).padStart(4, "0")));
+    // Group "1" is the token suggestions; group "0" is whole lines, which are not offered
+    // here because this position is mid-identifier rather than at the start of a line.
+    assert.deepEqual(sorts, sorts.map((_, n) => `1${String(n).padStart(4, "0")}`));
   });
 
   test("it offers identifiers, not punctuation", async () => {
@@ -492,6 +494,124 @@ describe("the language server", () => {
       });
       const init = await c.request("initialize", { rootUri: pathToFileURL(dir).href, capabilities: WATCHING_CLIENT });
       answered(init, "initialize after an early notification");
+    });
+  });
+
+  describe("whole lines, at a line start and nowhere else", () => {
+    // The corpus files repeat `renderWidget(null);` after the same context, so the line
+    // table has something decided to say. `lineSource` is opened as the buffer.
+    const lineSource = 'export function renderWidget(w) { return w.name; }\n';
+
+    /** Every line item the server offered at this position. */
+    const linesOf = (r) => r.result.items.filter((i) => String(i.sortText).startsWith("0"));
+
+    test("at the start of a line it offers whole lines, ahead of the tokens", async () => {
+      const { c } = await started([], undefined, lineSource);
+      // line 1 is empty: the cursor is at a line start, which is the only place a whole
+      // line is the thing being asked for.
+      const r = await c.request("textDocument/completion", {
+        textDocument: { uri },
+        position: { line: 1, character: 0 },
+      });
+      const lines = linesOf(r);
+      assert.ok(lines.length > 0, `expected a line item, got ${JSON.stringify(r.result.items.map((i) => i.label))}`);
+      assert.equal(lines[0].label, "renderWidget(null);");
+      const sorts = r.result.items.map((i) => i.sortText);
+      assert.deepEqual(sorts, [...sorts].sort(), "lines must sort above the tokens");
+    });
+
+    test("a line item carries the file and line it came from", async () => {
+      // Provenance is the whole reason this is retrieval rather than generation: the
+      // suggestion is a pointer to code that exists, and the editor shows this panel.
+      const { c } = await started([], undefined, lineSource);
+      const r = await c.request("textDocument/completion", {
+        textDocument: { uri },
+        position: { line: 1, character: 0 },
+      });
+      const [first] = linesOf(r);
+      assert.match(first.documentation, /widget\.js:2/, `got ${first.documentation}`);
+      assert.match(first.detail, /^lexindex line \u00b7 \d+%$/, `got ${first.detail}`);
+    });
+
+    test("mid-identifier it offers no lines, only tokens", async () => {
+      // A smoke check, and honest about being one: a half-typed word changes the token
+      // tail, so the table would have had nothing to say at this position even without
+      // the guard. What makes `atLineStart` falsifiable is its own unit tests, in
+      // test/line-index.test.js -- this only pins that the two kinds coexist here.
+      const { c } = await started();
+      const r = await c.request("textDocument/completion", {
+        textDocument: { uri },
+        position: { line: 2, character: 6 },
+      });
+      assert.equal(linesOf(r).length, 0, "a whole line is not an answer mid-word");
+      assert.ok(r.result.items.length > 0, "the token suggestions are still there");
+    });
+
+    test("indentation before the cursor is still a line start", async () => {
+      // Same context as the previous test, but the cursor sits after two spaces. Leading
+      // whitespace must not disqualify the position the way a half-typed word does -- and
+      // asserting the same line comes back is what makes this test able to fail.
+      const { c } = await started([], undefined, lineSource + "  \n");
+      const r = await c.request("textDocument/completion", {
+        textDocument: { uri },
+        position: { line: 1, character: 2 },
+      });
+      const lines = linesOf(r);
+      assert.ok(lines.length > 0, "whitespace is not a half-typed word");
+      assert.equal(lines[0].label, "renderWidget(null);");
+    });
+
+    test("--no-line turns them off, and stops the table being built", async () => {
+      const { c } = await started(["--no-line"], undefined, lineSource);
+      const r = await c.request("textDocument/completion", {
+        textDocument: { uri },
+        position: { line: 1, character: 0 },
+      });
+      assert.equal(linesOf(r).length, 0, "--no-line means no line items");
+      assert.ok(r.result.items.length > 0, "token completion is unaffected");
+    });
+
+    test("initializationOptions can turn them off too, the way an editor configures a server", async () => {
+      const { c } = await started([], { line: false }, lineSource);
+      const r = await c.request("textDocument/completion", {
+        textDocument: { uri },
+        position: { line: 1, character: 0 },
+      });
+      assert.equal(linesOf(r).length, 0);
+    });
+
+    test("a confidence floor of 1 withholds every line, and nothing else", async () => {
+      // The gate is the same one the published numbers were measured through, so it has
+      // to be reachable from an editor rather than only from the CLI.
+      const { c } = await started([], { minConfidence: 1.01 }, lineSource);
+      const r = await c.request("textDocument/completion", {
+        textDocument: { uri },
+        position: { line: 1, character: 0 },
+      });
+      assert.equal(linesOf(r).length, 0, "nothing clears the bar");
+      assert.ok(r.result.items.length > 0, "the tokens are not gated by it");
+    });
+
+    test("at most three lines are offered, however many the corpus holds", async () => {
+      // Six files, six different continuations of one context, and the floor lowered so
+      // none of them is gated away: without the cap this returns all six. The tail past
+      // three is where the wrong ones live, and this list sits above the tokens.
+      const many = fs.mkdtempSync(path.join(os.tmpdir(), "lexindex-many-"));
+      try {
+        for (let i = 0; i < 6; i++) {
+          fs.writeFileSync(path.join(many, `f${i}.js`), `const shared = compute(x);\nbranch${i}();\n`);
+        }
+        const { c } = await started([many], { minConfidence: 0 }, "const shared = compute(x);\n");
+        const r = await c.request("textDocument/completion", {
+          textDocument: { uri },
+          position: { line: 1, character: 0 },
+        });
+        const lines = linesOf(r);
+        assert.ok(lines.length > 0, "the fixture must actually produce candidates");
+        assert.equal(lines.length, 3, `six continuations exist; ${lines.length} were offered`);
+      } finally {
+        fs.rmSync(many, { recursive: true, force: true });
+      }
     });
   });
 });

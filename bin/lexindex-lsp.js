@@ -22,6 +22,13 @@
  * BufferSession, so a keystroke costs the keystroke rather than the file; every save runs
  * updateIndexFile, so the repository index tracks the tree instead of going stale the
  * moment anybody writes to disk.
+ *
+ * At the start of a line it also offers WHOLE LINES, retrieved from the index rather than
+ * generated, each carrying the file and line it came from. That is the one place a server
+ * with no idea what is in scope has something a type-aware one does not: it has read the
+ * repository, and it can say "this is what followed here the last nine times". Only at a
+ * line start, because that is the only position where "the next line" is the thing being
+ * asked for -- see `atLineStart`. Turn it off with `--no-line`.
  */
 
 import path from "node:path";
@@ -33,6 +40,7 @@ import { lex } from "../src/lex.js";
 import { topWords } from "../src/identifiers.js";
 import { recitalBand } from "../src/count-model.js";
 import { resolveLanguages } from "../src/languages.js";
+import { localIndexFor, atLineStart, DEFAULT_MIN_CONFIDENCE } from "../src/line-index.js";
 
 // Read rather than repeated: a version written down twice is a version that disagrees
 // with itself at the next release, and this one already would have.
@@ -44,22 +52,40 @@ const cliDirs = [];
 let langSpec = null;
 let beta = 0.5;
 let k = 8;
+let lineMode = true;
+let minConfidence = DEFAULT_MIN_CONFIDENCE;
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === "--lang") langSpec = argv[++i];
   else if (a === "--beta") beta = Number(argv[++i]);
   else if (a === "-k") k = Number(argv[++i]);
+  else if (a === "--no-line") lineMode = false;
+  else if (a === "--min-confidence") minConfidence = Number(argv[++i]);
   else if (a === "-h" || a === "--help") {
     process.stdout.write(
       "usage: lexindex-lsp [<dir>...] [--lang <names>] [--beta <n>] [-k <n>]\n" +
+        "                   [--no-line] [--min-confidence <n>]\n" +
         "A language server speaking completion only. Point your editor at it.\n" +
-        "With no <dir>, it indexes the workspace root the editor reports.\n"
+        "With no <dir>, it indexes the workspace root the editor reports.\n" +
+        "At a line start it also offers whole lines from the index, with provenance;\n" +
+        "--no-line turns that off and stops the line table being built at all.\n"
     );
     process.exit(0);
   } else cliDirs.push(a);
 }
 if (!Number.isFinite(beta) || beta < 0 || beta > 1) beta = 0.5;
 if (!Number.isFinite(k) || k < 1) k = 8;
+if (!Number.isFinite(minConfidence) || minConfidence < 0) minConfidence = DEFAULT_MIN_CONFIDENCE;
+
+/**
+ * How many whole lines to offer at once.
+ *
+ * The right line is the top one about half the time it is offered and inside the top three
+ * about 40% of all gated positions, so a short list is worth more than a single answer --
+ * but the tail past three is where the wrong ones live, and this list sits above the token
+ * suggestions. Three.
+ */
+const LINE_ITEMS = 3;
 
 // ---- state -----------------------------------------------------------------
 /** uri -> { text, session } */
@@ -161,6 +187,9 @@ function buildTheIndex() {
   }
   // retainFileTokens is what lets a save update one file instead of rebuilding the tree.
   options.retainFileTokens = true;
+  // The line table is a second pass and a real cost, so `--no-line` must stop it being
+  // built rather than merely stop it being consulted.
+  options.lineIndex = lineMode;
 
   const dirs = cliDirs.length ? cliDirs : roots;
   if (!dirs.length) {
@@ -233,6 +262,11 @@ function handle(msg) {
         k = Math.floor(Number(opts.k));
       }
       if (Array.isArray(opts.dirs)) for (const d of opts.dirs) cliDirs.push(String(d));
+      if (opts.line === false) lineMode = false;
+      if (opts.minConfidence !== undefined && Number.isFinite(Number(opts.minConfidence))) {
+        const c = Number(opts.minConfidence);
+        if (c >= 0) minConfidence = c;
+      }
 
       reply(id, {
         capabilities: {
@@ -321,18 +355,26 @@ function handle(msg) {
       const offset = offsetAt(doc.text, params.position);
       const before = doc.text.slice(0, offset);
 
+      const items = [];
+
+      // Whole lines first, and only at a line start. `sortText` is grouped "0" for lines
+      // and "1" for tokens so the group order survives the editor's own sort: at a line
+      // start a retrieved line is the specific thing this server knows that a type-aware
+      // one does not, and mid-identifier it is not offered at all.
+      for (const line of lineSuggestions(before)) items.push(line);
+
       // Identifier-shaped suggestions only -- see identifiers.js for why, and for the
       // overshoot this used to spell out here. Keeping the rule in one place is the
       // point of that module: it was extracted FROM this handler, and a second copy
       // here is how the two quietly stop agreeing.
-      const items = [];
+      let nth = 0;
       for (const entry of topWords(doc.session, before, k)) {
         items.push({
           label: entry.token,
           kind: 1, // Text: this server genuinely does not know what the token is
           // sortText preserves our order; without it the editor re-sorts alphabetically
           // and throws away the only thing this server contributes.
-          sortText: String(items.length).padStart(4, "0"),
+          sortText: `1${String(nth++).padStart(4, "0")}`,
           filterText: entry.token,
           detail: "lexindex",
         });
@@ -345,6 +387,51 @@ function handle(msg) {
       // Notifications are ignored; requests must be answered or the editor waits forever.
       if (id !== undefined) replyError(id, -32601, `unhandled method: ${method}`);
   }
+}
+
+/**
+ * Whole-line completion items for a cursor, or none.
+ *
+ * Three conditions, each of which is a way of declining to guess:
+ *
+ * - only at the start of a line, because the table answers "what line followed this
+ *   context" and mid-identifier that is not the question being asked;
+ * - only when the index actually holds this context, which on a held-out measurement was
+ *   about three quarters of line positions and never invents the other quarter;
+ * - only when the best candidate holds `minConfidence` of the score. A list the editor
+ *   pops up unbidden is worse than no list, and this gate is the one the published
+ *   numbers were measured through -- the right line is the top item about half the time
+ *   it clears this bar, and inside the top three about 40% of all positions.
+ *
+ * The buffer above the cursor is indexed alongside the repository. It is the one corpus
+ * the server never has on disk, and on the measured splits it was worth 3.1 and 6.4
+ * points of accuracy -- code repeats locally far more than it repeats globally.
+ */
+function lineSuggestions(before) {
+  if (!lineMode || !built || !built.lines || !atLineStart(before)) return [];
+  const ranked = built.lines.candidates(before, { local: localIndexFor(before) });
+  if (ranked.length === 0 || ranked[0].confidence < minConfidence) return [];
+  return ranked.slice(0, LINE_ITEMS).map((c, i) => ({
+    label: c.text,
+    kind: 1, // Text, for the same reason the tokens are: this is retrieval, not analysis
+    insertText: c.text,
+    sortText: `0${String(i).padStart(4, "0")}`,
+    filterText: c.text,
+    detail: `lexindex line \u00b7 ${(c.confidence * 100).toFixed(0)}%`,
+    // Provenance is what makes a suggestion checkable rather than merely convincing, and
+    // an editor shows this panel beside the list, so it costs the reader nothing.
+    documentation: `${relativeToRoot(c.file)}:${c.line} \u2014 seen ${c.count} time(s)`,
+  }));
+}
+
+/** Provenance a human can place, rather than an absolute path down the whole machine. */
+function relativeToRoot(file) {
+  if (file === "<buffer>") return "this buffer, above the cursor";
+  for (const root of cliDirs.length ? cliDirs : roots) {
+    const rel = path.relative(root, file);
+    if (rel && !rel.startsWith("..")) return rel;
+  }
+  return file;
 }
 
 /**
