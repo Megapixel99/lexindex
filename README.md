@@ -221,23 +221,33 @@ node node_modules/lexindex/tools/measure.mjs --lang go ./pkg
 
 `python`, `go`, `rust`, `java`, `kotlin`, `ruby`, `c`, `cpp`, `csharp`, `php`, `swift`, `shell`, `sql`, comma-separated, or `all`. **The default is unchanged and stays JavaScript**, because every number in this README was measured on JavaScript and TypeScript corpora and a default that quietly widened would change what those numbers describe. `--lang` also brings that language's build directories with it (`target` for Rust and Java, `bin`/`obj`/`Library` for C#) on the same reasoning `node_modules` is skipped, and only when that language is asked for, since `target` and `bin` are real source directories in somebody's repository.
 
-Whether it *works* on your language is a question rather than a claim, so the harness takes `--lang` too. Seven corpora, six languages, each a single real project checked for generated and vendored code first:
+Whether it *works* on your language is a question rather than a claim, so the harness takes `--lang` too. Seven corpora, six languages, each a public repository checked for generated and vendored code first. Every corpus links to the exact commit it was measured at, because a completion number without its corpus cannot be read and a corpus nobody else can fetch cannot be checked:
 
 | language | corpus | files | recital | hybrid | vs word list | vs frequency table |
 |---|---|---|---|---|---|---|
-| Python | falken/service | 101 | 55.3% | **72.3%** | 23.4% (z=12.00) | 28.0% (z=12.38) |
-| Python | stable-diffusion-webui | 117 | 35.2% | **60.9%** | 34.2% (z=8.11) | 24.7% (z=10.55) |
-| Go | mailslurper/pkg | 66 | 55.3% | **66.2%** | 16.9% (z=10.87) | 24.8% (z=10.37) |
-| Java | Bukkit | 814 | 61.5% | **68.8%** | 33.9% (z=28.58) | 31.1% (z=31.19) |
-| Ruby | canvas/app | 796 | 65.0% | **76.7%** | 23.4% (z=37.22) | 28.0% (z=36.65) |
-| Swift | GamePigeonClone | 100 | 56.5% | **69.5%** | 35.1% (z=9.53) | 28.6% (z=11.05) |
-| C | D2XX | 48 | 53.3% | **62.7%** | 28.8% (z=6.55) | 20.3% (z=8.13) |
+| Python | [falken/service](https://github.com/google-research/falken/tree/eecd8ab255e5bf3ea31c209bd1ce2f25e7965814/service) | 101 | 55.3% | **72.3%** | 23.4% (z=12.00) | 28.0% (z=12.38) |
+| Python | [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/tree/82a973c04367123ae98bd9abdf80d9eda9b910e2) | 171 | 38.1% | **60.0%** | 34.7% (z=10.17) | 16.7% (z=14.64) |
+| Go | [mailslurper/pkg](https://github.com/mailslurper/mailslurper/tree/95aa534ff92f628a8be3221a91cf9d09cf48e3db/pkg) | 68 | 57.3% | **72.3%** | 13.9% (z=11.99) | 23.4% (z=11.33) |
+| Java | [Bukkit](https://github.com/Bukkit/Bukkit/tree/f210234e59275330f83b994e199c76f6abd41ee7) | 585 | 58.0% | **67.5%** | 32.4% (z=23.89) | 28.0% (z=27.43) |
+| Ruby | [canvas-lms/app](https://github.com/instructure/canvas-lms/tree/1c9f0bb8013ed69c4f2efe11fd483025469b7e6c/app) | 1,385 | 68.1% | **75.3%** | 24.9% (z=46.72) | 28.9% (z=46.97) |
+| Swift | [IceCubesApp](https://github.com/Dimillian/IceCubesApp/tree/b2db3033fbf67a97b54d25d6dac2df8a029b26b1) | 343 | 59.9% | **73.0%** | 37.3% (z=18.45) | 29.8% (z=21.18) |
+| C | [tmux](https://github.com/tmux/tmux/tree/59dc0e75c439aa88bd303fd0e3e02dae677e78b1) minus `compat/` | 129 | 64.5% | **70.1%** | 31.6% (z=9.93) | 21.7% (z=12.74) |
 
 `ident+1char`, held-out files, paired McNemar, generated code excluded. The hybrid beat both baselines on all seven, and the gaps are large rather than merely significant.
 
-The falken row was published wrong and is corrected here. It first read 213 files at 64.2% recital and 78.5% accuracy, from a corpus checked by hand for protobuf stubs and vendored directories. More than half of it (140 files of 266) turned out to be FlatBuffers output under `generated_flatbuffers/`, which that check did not look for. The verdict survived the correction and the numbers did not. Nothing else in the table moved: the other six corpora hold no generated files at all.
+An earlier version of this table measured local checkouts, and two of those were not public repositories at all: somebody's Swift game clone and an FTDI driver drop. A row nobody else can fetch is a row nobody else can check. Every corpus above is a fresh `git clone` of the linked commit, and the harness is seeded (`SEED=0`, a fifth of the files held out, 25 positions per file), so the rows reproduce rather than being taken on trust: falken came back from a fresh clone to the digit, which is the check on that claim. The other rows moved, because a public clone is a different commit from whatever was on one laptop, and because the Swift and C rows are different projects.
 
-Read two limits into that before quoting it. **These corpora do not re-derive the thresholds in the table at the top of this README**, which came from JavaScript and TypeScript; several are far larger than the corpora behind those nulls, and z grows with the square root of the sample, so significance arrives more easily here than it did there, which is exactly why the row at 35.2% recital clears the frequency table when the table says that takes about 60%. The band the CLI prints is still the JavaScript-derived one. And seven corpora is seven corpora: it says the mechanism carries, not that it carries at any particular rate on your repository. That is what the harness is for.
+```sh
+git clone --depth 1 https://github.com/tmux/tmux
+rm -rf tmux/compat      # 46 imported libc replacements; see below
+node node_modules/lexindex/tools/measure.mjs --lang c ./tmux
+```
+
+That `rm -rf` is the vendored-code check arriving on a corpus that does not have a `vendor/` directory to skip. tmux's `compat/` is 46 files of `asprintf`, `getopt_long`, `strlcpy` and OpenBSD's `imsg`, imported rather than written there, and counting them was worth 2.7 points of recital and 4.4 points of accuracy to the row above. The other six corpora carry no such pocket: falken's FlatBuffers output is the only tree dropped from any of them, and it is dropped by `--skip-generated` rather than by hand.
+
+The falken row was published wrong and is corrected here. It first read 213 files at 64.2% recital and 78.5% accuracy, from a corpus checked by hand for protobuf stubs and vendored directories. More than half of it (140 files of 266) turned out to be FlatBuffers output under `generated_flatbuffers/`, which that check did not look for. The verdict survived the correction and the numbers did not. It is still the only generated code in the table: the detector finds none at all in the other six corpora.
+
+Read two limits into that before quoting it. **These corpora do not re-derive the thresholds in the table at the top of this README**, which came from JavaScript and TypeScript; several are far larger than the corpora behind those nulls, and z grows with the square root of the sample, so significance arrives more easily here than it did there, which is exactly why the row at 38.1% recital clears the frequency table when the table says that takes about 60%. The band the CLI prints is still the JavaScript-derived one. And seven corpora is seven corpora: it says the mechanism carries, not that it carries at any particular rate on your repository. That is what the harness is for.
 
 The warning in *What it cannot do* about corpus choice applies with more force here, not less. Generated code is more common outside the JavaScript world (protobuf stubs, OpenAPI clients, parser tables, ORM scaffolding) and it repeats itself enormously, which is precisely what this tool measures.
 
@@ -249,7 +259,7 @@ lexindex ./service --lang python --skip-generated --stats
 node node_modules/lexindex/tools/measure.mjs --lang python --skip-generated ./service
 ```
 
-It reads the head of each file for the conventional markers (Go's `Code generated … DO NOT EDIT.`, `@generated`, the protobuf and FlatBuffers headers) and recognises a handful of filename conventions such as `*_pb2.py`, `*.pb.go` and `*.min.js`. Only the head, because a file that merely *discusses* generated code is not one; only markers at the start of a line after a comment leader, because `# they could be auto-generated by an admin` in a Rails model is a sentence, not a header. Across 2,288 files in six languages it flagged 141: the 140 FlatBuffers files, and its own source, which contains the marker strings it searches for.
+It reads the head of each file for the conventional markers (Go's `Code generated … DO NOT EDIT.`, `@generated`, the protobuf and FlatBuffers headers) and recognises a handful of filename conventions such as `*_pb2.py`, `*.pb.go` and `*.min.js`. Only the head, because a file that merely *discusses* generated code is not one; only markers at the start of a line after a comment leader, because `# they could be auto-generated by an admin` in a Rails model is a sentence, not a header. Across the 3,613 files of the seven corpora above it flagged 140, all of them the FlatBuffers files under falken's `generated_flatbuffers/`. Point it at this repository and it flags one more: its own source, which contains the marker strings it searches for.
 
 **Nothing is excluded by default.** It is a heuristic, and one that silently dropped a third of a repository would be worse than the problem; and every number here was measured without it, so switching it on by default would change what those numbers describe. The default is to count and to say so, which is the same posture as the recital rate: report the thing that decides whether the answer is any good, and let the reader act on it. On sympy's `parsing` module, three ANTLR-generated files among 52 were worth 2.6 points of recital and 9.4 points of accuracy.
 
