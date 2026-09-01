@@ -20,13 +20,14 @@ const OVERSHOOT = 4;
 /**
  * Up to `k` identifier-shaped suggestions, best first, with their scores.
  *
- * @param {import("./session.js").BufferSession} session a session over the open documents
+ * @param {{completeScored: (text: string, opts: {k: number}) => {token: string, score: number}[]}} source
+ *   anything that scores completions -- a `BufferSession` in an editor, a `Completer` in the CLI
  * @param {string} textBeforeCursor everything above the cursor
  * @param {number} k how many to keep
  * @returns {{token: string, score: number}[]}
  */
-export function topWords(session, textBeforeCursor, k) {
-  const scored = session.completeScored(textBeforeCursor, { k: k * OVERSHOOT });
+export function topWords(source, textBeforeCursor, k) {
+  const scored = source.completeScored(textBeforeCursor, { k: k * OVERSHOOT });
   const out = [];
   for (const entry of scored) {
     if (!isWord(entry.token)) continue;

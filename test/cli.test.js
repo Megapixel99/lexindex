@@ -833,3 +833,66 @@ describe("spotting generated code", () => {
     }
   });
 });
+
+describe("--words keeps the identifier-shaped suggestions", () => {
+  // The rule every editor integration applies, reachable from the CLI through the SAME
+  // helper. A popup offering `;` is noise; a measurement that dropped punctuation would
+  // flatter this engine, so the default keeps it and the flag is opt-in.
+  const buffer = "renderWidget(widgetCount);\nrenderWidget(";
+
+  test("the default still offers punctuation, so a measurement stays honest", () => {
+    const r = run([dir, "--stdin", "-k", "5"], buffer);
+    assert.equal(r.status, 0);
+    const tokens = r.stdout.trim().split("\n").filter(Boolean);
+    assert.ok(tokens.length > 0, "expected suggestions");
+    assert.ok(
+      tokens.some((t) => !/^[A-Za-z_]\w*$/.test(t)),
+      `expected punctuation in the default list, got ${JSON.stringify(tokens)}`
+    );
+  });
+
+  test("--words offers identifiers only", () => {
+    const r = run([dir, "--stdin", "-k", "5", "--words"], buffer);
+    assert.equal(r.status, 0);
+    const tokens = r.stdout.trim().split("\n").filter(Boolean);
+    assert.ok(tokens.length > 0, "expected suggestions");
+    for (const t of tokens) {
+      assert.match(t, /^[A-Za-z_]\w*$/, `punctuation survived --words: ${JSON.stringify(t)}`);
+    }
+  });
+
+  test("--words fills k rather than filtering a short list down", () => {
+    // The bug identifiers.js exists to prevent: ask for k, filter afterwards, and you
+    // get fewer than k whenever punctuation ranks highly -- which at a `(` is most of
+    // the time. Asserted against the naive alternative, so it fails if the overshoot
+    // is ever dropped.
+    const k = 3;
+    // A position where punctuation genuinely ranks: after a `.` the closing paren of the
+    // surrounding call scores above the third identifier.
+    const crowded = "export function renderPanel(panel) { return panel.";
+    const words = run([dir, "--stdin", "-k", String(k), "--words"], crowded)
+      .stdout.trim().split("\n").filter(Boolean);
+    const naive = run([dir, "--stdin", "-k", String(k)], crowded)
+      .stdout.trim().split("\n").filter(Boolean)
+      .filter((t) => /^[A-Za-z_]\w*$/.test(t));
+    assert.equal(words.length, k, `--words returned ${words.length}, expected a full ${k}`);
+    for (const t of words) {
+      // A full k is only the point if every one of them is usable; counting alone would
+      // pass on the unfiltered list, which is the behaviour this test exists to reject.
+      assert.match(t, /^[A-Za-z_]\w*$/, `--words returned punctuation: ${JSON.stringify(t)}`);
+    }
+    assert.ok(
+      naive.length < k,
+      `this fixture no longer proves anything: filtering the plain list already gave ${naive.length} of ${k}`
+    );
+  });
+
+  test("--words is reflected in --json too, so the two outputs agree", () => {
+    const r = run([dir, "--stdin", "-k", "5", "--words", "--json"], buffer);
+    assert.equal(r.status, 0);
+    const out = JSON.parse(r.stdout);
+    for (const t of out.suggestions) {
+      assert.match(t, /^[A-Za-z_]\w*$/, `punctuation in --json --words: ${JSON.stringify(t)}`);
+    }
+  });
+});
