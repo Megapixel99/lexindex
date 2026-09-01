@@ -101,16 +101,22 @@ export const LINE_CONTEXT = 4;
 export const MAX_PER_CONTEXT = 16;
 
 /**
- * Share of the total score the best candidate must hold before it is offered at all.
+ * How confident the best candidate must be before it is offered at all.
  *
- * With no floor the ranking answers on 37.2% and 35.8% of positions across the two splits
- * and is exact on 23.8% and 25.6% of those. At 0.3 it answers on 30.4% and 30.1% and is
- * exact on 29.1% and 30.2%. That trade is the right one for this feature: it prints one
- * line for a human to accept, so a wrong line costs more than a missing one, and the
- * candidates are still reachable through `candidates()` for a caller that wants a list.
- * Pass 0 to recover the coverage.
+ * `confidence` is a share of the evidence times how much evidence there is — see
+ * `candidates` for the Witten-Bell factor — so 0.15 is not as low as it looks: a lone
+ * sighting of a context with one continuation scores 0.5 before the share is applied.
+ *
+ * At 0.15 the ranking answers on 30.4% and 30.0% of positions across the two public splits
+ * and is exact on 29.0% and 30.2%, which is what the plain share did at its own default.
+ * The value changed because the scale did, not because the behaviour did.
+ *
+ * Turning it UP is what the plain share could not do. At 0.6 this answers on 4.7% of
+ * positions and is exact on 62.9% and 74.9%; at 0.8, on 2.3% at 82.1% and 79.5%. A share
+ * alone saturated: 37.6% of its answers sat at exactly 1.0, so even `--min-confidence 1`
+ * still answered on 13.9% of positions and could not be made more exact than 42.5%.
  */
-export const DEFAULT_MIN_CONFIDENCE = 0.3;
+export const DEFAULT_MIN_CONFIDENCE = 0.15;
 
 /** The trimmed text of every non-blank line, with its 1-based number. */
 function linesOf(text) {
@@ -197,14 +203,23 @@ export class LineIndex {
       if (!seen || seen.size === 0) continue;
       let total = 0;
       for (const [, m] of seen) total += m.count;
+      const distinct = seen.size;
       for (const [text, m] of seen) {
         const add = weightScale * w * (m.count / total);
         const prior = acc.get(text);
         if (prior) {
           prior.score += add;
-          if (m.count > prior.count) Object.assign(prior, { count: m.count, file: m.file, line: m.line });
+          // The evidence reported is the evidence of the context that argued hardest for
+          // this line, so `support` and `distinct` describe one real context rather than
+          // being maxima taken from two different widths that never agreed.
+          if (add > prior.best) {
+            Object.assign(prior, { best: add, support: total, distinct, count: m.count, file: m.file, line: m.line });
+          }
         } else {
-          acc.set(text, { text, score: add, count: m.count, file: m.file, line: m.line });
+          acc.set(text, {
+            text, score: add, best: add,
+            support: total, distinct, count: m.count, file: m.file, line: m.line,
+          });
         }
       }
     }
@@ -228,7 +243,15 @@ export class LineIndex {
     if (local) local.#vote(acc, toks, 1);
     const out = [...acc.values()].sort((a, b) => b.score - a.score);
     const sum = out.reduce((s, c) => s + c.score, 0);
-    for (const c of out) c.confidence = sum > 0 ? c.score / sum : 0;
+    for (const c of out) {
+      const share = sum > 0 ? c.score / sum : 0;
+      // Witten-Bell, the same `N / (N + T)` the count model uses one directory over: times
+      // seen over distinct continuations. A share alone answers "what fraction of the
+      // evidence points here" and says nothing about how much evidence there is, so a
+      // context seen exactly once scored a flat 1.0 — maximum confidence from one sighting.
+      c.reliability = c.support / (c.support + c.distinct);
+      c.confidence = share * c.reliability;
+    }
     return out;
   }
 
@@ -254,6 +277,7 @@ export class LineIndex {
       file: best.file,
       line: best.line,
       count: best.count,
+      support: best.support,
       confidence: best.confidence,
       alternatives: ranked.length,
     };
