@@ -111,7 +111,10 @@ jobs:
           test -x node_modules/.bin/lexindex     || { echo "::error::lexindex not installed as a binary"; exit 1; }
           test -x node_modules/.bin/lexindex-lsp || { echo "::error::lexindex-lsp not installed as a binary"; exit 1; }
           echo 'export const consumerSymbol = 1;' > sample.js
-          node_modules/.bin/lexindex . --stats
+          # Same hole as the measure job's old `grep -q 'COMPLETE'`, one layer down: an
+          # installed CLI that walks the tree and finds nothing prints its stats table and
+          # exits 0. The file count is what says it indexed the sample.
+          didrun --expect-count 'files *: ([0-9]+)' -- node_modules/.bin/lexindex . --stats
           # Drive the installed server the way an editor does: one framed initialize, one
           # framed reply. A server that ships but cannot answer a handshake is not shipped.
           node -e '
