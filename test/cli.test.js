@@ -896,3 +896,66 @@ describe("--words keeps the identifier-shaped suggestions", () => {
     }
   });
 });
+
+describe("--line retrieves a whole line, or says it cannot", () => {
+  // Greedy token-by-token extension of this model is exact about 3% of the time at ten
+  // tokens, which is roughly a line, so a line is looked up rather than assembled. The
+  // abstention below is the property that makes shipping that safe.
+  const seen = "import { renderWidget } from './alpha.js';";
+  const unseen = "const quantumFluxCapacitor = wobble(zorp);";
+
+  test("it retrieves the line that followed this context, with provenance", () => {
+    const r = run([dir, "--stdin", "--line"], seen);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), "export const widgetCount = 2;");
+    assert.match(r.stderr, /beta\.js:2/, `expected file:line provenance, got ${r.stderr}`);
+  });
+
+  test("an unseen context is refused, not invented", () => {
+    const r = run([dir, "--stdin", "--line"], unseen);
+    assert.equal(r.status, 1, "an unseen context exits 1: ran, nothing to suggest");
+    assert.equal(r.stdout.trim(), "", "nothing may reach stdout when there is no answer");
+    assert.match(r.stderr, /has not been seen/);
+  });
+
+  test("--json carries the hit, or an explicit null, and the exit code agrees", () => {
+    const hit = run([dir, "--stdin", "--line", "--json"], seen);
+    assert.equal(hit.status, 0);
+    const body = JSON.parse(hit.stdout);
+    assert.equal(body.line.text, "export const widgetCount = 2;");
+    assert.equal(typeof body.line.file, "string");
+    assert.equal(typeof body.line.line, "number");
+
+    const miss = run([dir, "--stdin", "--line", "--json"], unseen);
+    assert.equal(miss.status, 1);
+    assert.equal(JSON.parse(miss.stdout).line, null, "a miss is an explicit null, not an omitted key");
+  });
+
+  test("it reports how confident it is, not just what it found", () => {
+    const r = run([dir, "--stdin", "--line"], seen);
+    assert.match(r.stderr, /\d+% confident/, `expected a confidence share, got ${r.stderr}`);
+  });
+
+  test("--min-confidence 1 withholds a line it would otherwise have offered", () => {
+    // The two refusals are different and say so: this context HAS been seen, it is just
+    // not decided enough. Reporting "has not been seen" here would be a lie.
+    const strict = run([dir, "--stdin", "--line", "--min-confidence", "1.01"], seen);
+    assert.equal(strict.status, 1, "nothing clears the bar, so nothing is offered");
+    assert.equal(strict.stdout.trim(), "", "nothing may reach stdout when there is no answer");
+    assert.match(strict.stderr, /nothing here is likely enough/);
+    assert.doesNotMatch(strict.stderr, /has not been seen/, "it HAS been seen; only the bar failed");
+  });
+
+  test("--min-confidence 0 answers wherever there is anything at all", () => {
+    const loose = run([dir, "--stdin", "--line", "--min-confidence", "0"], seen);
+    assert.equal(loose.status, 0, loose.stderr);
+    assert.equal(loose.stdout.trim(), "export const widgetCount = 2;");
+  });
+
+  test("the line table is not built unless it is asked for", () => {
+    // It is a second pass over the same text; nothing that only completes tokens pays.
+    const plain = run([dir, "--stdin", "--json"], "renderWidget(");
+    assert.equal(plain.status, 0);
+    assert.equal(JSON.parse(plain.stdout).line, undefined, "no --line means no line field");
+  });
+});

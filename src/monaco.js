@@ -35,15 +35,27 @@ import { topWords } from "./identifiers.js";
  * Build a Monaco `CompletionItemProvider` over an open-document set.
  *
  * @param {import("./documents.js").DocumentSet} docs the open documents
- * @param {{monaco?: any, kind?: number, k?: number, cacheBeta?: number, minPrefix?: number}} [options]
+ * @param {{monaco?: any, kind?: number, k?: number, cacheBeta?: number, minPrefix?: number,
+ *          lines?: boolean, lineLimit?: number, minConfidence?: number}} [options]
  *   `monaco` the namespace, read only for `languages.CompletionItemKind.Text`; `kind` that
  *   value directly, if you would rather pass it than the namespace; `k` how many to offer;
- *   `cacheBeta` the blend; `minPrefix` how many characters before this answers at all.
+ *   `cacheBeta` the blend; `minPrefix` how many characters before this answers at all;
+ *   `lines` whether to offer whole lines at a line start, on when the set was built with
+ *   `lineIndex: true`; `lineLimit` how many; `minConfidence` the floor they must clear.
  * @returns {{provideCompletionItems: (model: any, position: any) => {suggestions: object[], incomplete: boolean}}}
  */
 export function completionProvider(
   docs,
-  { monaco = null, kind = undefined, k = 5, cacheBeta = 0.5, minPrefix = 1 } = {}
+  {
+    monaco = null,
+    kind = undefined,
+    k = 5,
+    cacheBeta = 0.5,
+    minPrefix = 1,
+    lines = true,
+    lineLimit = 3,
+    minConfidence = undefined,
+  } = {}
 ) {
   const itemKind =
     kind !== undefined
@@ -69,8 +81,16 @@ export function completionProvider(
       const { prefix } = splitAtCursor(before);
       if (prefix !== null && prefix.length < minPrefix) return empty();
 
+      // Whole lines first, and only at a line start. The gate lives on DocumentSet so this
+      // and the CodeMirror source cannot come to disagree about it.
+      //
+      // Unlike CodeMirror there is no `explicit` flag to consult, and none is needed:
+      // Monaco does not auto-trigger where there is no word being typed, so at a line
+      // start this provider is reached because somebody asked for it.
+      const lineItems = lines ? docs.lineSuggestions(before, { limit: lineLimit, minConfidence }) : [];
+
       const words = topWords(session, before, k);
-      if (words.length === 0) return empty();
+      if (words.length === 0 && lineItems.length === 0) return empty();
 
       // Monaco columns are 1-based, and the item replaces the partial word rather than
       // being inserted beside it.
@@ -81,6 +101,11 @@ export function completionProvider(
         endColumn: position.column,
       };
 
+      // One ascending run across both kinds, so lines sort above tokens. Zero padded so
+      // that "10" sorts after "9" rather than before it.
+      let rank = 0;
+      const order = () => String(rank++).padStart(4, "0");
+
       return {
         // `incomplete` is this editor's spelling of the decision the CodeMirror source
         // makes by omitting `validFor`: without it Monaco keeps the list and filters it
@@ -88,22 +113,39 @@ export function completionProvider(
         // is conditioned on the token before the cursor, so another keystroke can reorder
         // it and bring in candidates that were never in the list.
         incomplete: true,
-        suggestions: words.map((entry, i) => {
-          const item = {
-            label: entry.token,
-            insertText: entry.token,
-            filterText: entry.token,
-            range,
-            // Monaco re-sorts what it is handed, so an ordering not expressed in sortText
-            // is an ordering thrown away — the same reason lexindex-lsp sets it. Zero
-            // padded so that "10" sorts after "9" rather than before it.
-            sortText: String(i).padStart(4, "0"),
-            detail: "lexindex",
-          };
-          // Absent rather than guessed. See the header.
-          if (itemKind !== undefined) item.kind = itemKind;
-          return item;
-        }),
+        suggestions: [
+          ...lineItems.map((c) => {
+            const item = {
+              label: c.text,
+              insertText: c.text,
+              filterText: c.text,
+              range,
+              sortText: order(),
+              // Provenance, which is what makes a retrieved line checkable rather than
+              // merely convincing. Monaco shows `detail` beside the label and
+              // `documentation` in the panel next to it.
+              detail: `lexindex line \u00b7 ${(c.confidence * 100).toFixed(0)}%`,
+              documentation: `${c.file}:${c.line} \u2014 seen ${c.count} time(s)`,
+            };
+            if (itemKind !== undefined) item.kind = itemKind;
+            return item;
+          }),
+          ...words.map((entry) => {
+            const item = {
+              label: entry.token,
+              insertText: entry.token,
+              filterText: entry.token,
+              range,
+              // Monaco re-sorts what it is handed, so an ordering not expressed in sortText
+              // is an ordering thrown away -- the same reason lexindex-lsp sets it.
+              sortText: order(),
+              detail: "lexindex",
+            };
+            // Absent rather than guessed. See the header.
+            if (itemKind !== undefined) item.kind = itemKind;
+            return item;
+          }),
+        ],
       };
     },
   };

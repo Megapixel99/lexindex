@@ -217,3 +217,86 @@ describe("the CodeMirror source — what it touches, and what it follows", () =>
     assert.equal(source(contextAt("const conf").ctx), null, "B's own words must not come from the index");
   });
 });
+
+
+describe("the CodeMirror source — whole lines", () => {
+  const PAIR = "const config = loadConfig();\nconfig.enabled = true;\n";
+  const CURSOR = "const config = loadConfig();\n";
+
+  const lineSet = () => {
+    const docs = new DocumentSet({ lineIndex: true });
+    docs.open("doc0.js", PAIR);
+    docs.open("doc1.js", PAIR);
+    return docs;
+  };
+
+  test("at a line start, asked explicitly, it offers whole lines above the tokens", () => {
+    const source = completionSource(lineSet());
+    const { ctx } = contextAt(CURSOR, { explicit: true });
+    const options = source(ctx).options;
+    assert.equal(options[0].label, "config.enabled = true;", `got ${JSON.stringify(options.map((o) => o.label))}`);
+    assert.match(options[0].detail, /doc0\.js:2/, "provenance, so the suggestion is checkable");
+  });
+
+  test("boost still descends across both kinds, so the grouping survives re-ranking", () => {
+    // CodeMirror re-sorts what it is handed. A line offered above the tokens that did not
+    // say so in `boost` would be sorted back among them.
+    const source = completionSource(lineSet());
+    const { ctx } = contextAt(CURSOR, { explicit: true });
+    const boosts = source(ctx).options.map((o) => o.boost);
+    assert.ok(boosts.length > 1, "need both kinds present to check the order");
+    for (let i = 1; i < boosts.length; i++) {
+      assert.ok(boosts[i] < boosts[i - 1], `boost did not descend: ${boosts.join(", ")}`);
+    }
+  });
+
+  test("mid-identifier there are no line options, only words", () => {
+    // A smoke check that the two kinds coexist. What actually pins the guard is the
+    // DocumentSet test that builds a corpus able to answer mid-word; both adapters call
+    // the same `lineSuggestions`, so the rule is tested once rather than approximated twice.
+    const source = completionSource(lineSet());
+    const { ctx } = contextAt("const config = loadConfig();\nconfig.ena", { explicit: true });
+    const result = source(ctx);
+    assert.ok(result, "the token suggestions are still offered");
+    assert.ok(
+      result.options.every((o) => !o.label.includes(";")),
+      `a whole line was offered mid-word: ${JSON.stringify(result.options.map((o) => o.label))}`,
+    );
+  });
+
+  test("a line start with nothing typed stays silent unless asked", () => {
+    // The gate that keeps a popup from appearing every time you press Enter.
+    const source = completionSource(lineSet());
+    const { ctx } = contextAt(CURSOR, { explicit: false });
+    assert.equal(source(ctx), null);
+  });
+
+  test("lines: false turns them off and leaves the words alone", () => {
+    const source = completionSource(lineSet(), { lines: false });
+    const { ctx } = contextAt(CURSOR, { explicit: true });
+    const options = source(ctx).options;
+    assert.ok(options.length > 0, "words are unaffected");
+    assert.ok(options.every((o) => o.detail === undefined), "no line items, so no provenance");
+  });
+
+  test("a set built without lineIndex simply has none to offer", () => {
+    const docs = new DocumentSet();
+    docs.open("doc0.js", PAIR);
+    docs.open("doc1.js", PAIR);
+    const source = completionSource(docs);
+    const { ctx } = contextAt(CURSOR, { explicit: true });
+    const result = source(ctx);
+    if (result) assert.ok(result.options.every((o) => o.detail === undefined));
+  });
+
+  test("it still reads only what CodeMirror is being asked for", () => {
+    // The Proxy throws on any other property; asserting the read set keeps the surface
+    // from widening quietly now that there is a second code path through here.
+    const source = completionSource(lineSet());
+    const { ctx, read } = contextAt(CURSOR, { explicit: true });
+    source(ctx);
+    for (const r of read) {
+      assert.match(r, /^(context\.(pos|explicit|state)|state\.doc|doc\.sliceString)$/, `read ${r}`);
+    }
+  });
+});

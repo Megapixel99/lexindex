@@ -12,6 +12,17 @@
  */
 export { lex, isWord, splitAtCursor, trailingWordStart } from "./lex.js";
 export { CountModel, recitalBand } from "./count-model.js";
+export {
+  LineIndex,
+  localIndex,
+  localIndexFor,
+  atLineStart,
+  LOCAL_TAIL_LINES,
+  LINE_WIDTHS,
+  LINE_CONTEXT,
+  MAX_PER_CONTEXT,
+  DEFAULT_MIN_CONFIDENCE,
+} from "./line-index.js";
 export { CacheModel } from "./cache-model.js";
 export { Completer } from "./completer.js";
 export { BufferSession } from "./session.js";

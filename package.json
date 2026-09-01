@@ -27,7 +27,8 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "test:ci": "mkdir -p reports && node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=reports/junit.xml test/*.test.js",
-    "measure": "node tools/measure.mjs"
+    "measure": "node tools/measure.mjs",
+    "measure:line": "node tools/measure-line.mjs"
   },
   "keywords": [
     "completion",

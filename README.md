@@ -417,6 +417,154 @@ Suggestions go to stdout one per line and everything else goes to stderr, so the
 
 `--ext` and `--exclude` exist because corpus choice is the largest free parameter in a completion benchmark, and the README above spends a numbered point on the three separate ways it inflated this project's own headline. If you widen the net past the defaults, say what you indexed when you quote the number.
 
+## A whole line, retrieved rather than guessed
+
+`--line` answers a different question from the rest of this tool: not *what token comes
+next*, but *what line came next, last time you were here*.
+
+```
+$ lexindex ./src --stdin --line
+type: 'integer',
+  src/classes/openapi.js:29 - 60% confident, seen 6 time(s), 4 other(s) here
+```
+
+It does not generate. Running the token completer on its own output was measured over 883
+positions on a corpus of seven sibling services, and it decays about geometrically:
+
+| tokens ahead | exact |
+|---|---|
+| 1 | 43.0% |
+| 3 | 19.7% |
+| 5 | 11.4% |
+| 10 | **3.1%** |
+
+Ten tokens is roughly a line, so a generated line is right about three times in a hundred.
+That is not a tuning problem: an order-5 model conditions on four tokens, and after a few
+self-generated steps the context is mostly its own output.
+
+So `--line` remembers instead. It keeps the lines that actually followed a context and
+returns the most likely, **with the file and line it came from**.
+
+### How it ranks, and how that was decided
+
+Measured on a public corpus anybody can fetch, for the reason the language table above
+gives: a row nobody else can clone is a row nobody else can check. Nine sibling middleware
+packages from the express family are indexed and two disjoint ones predicted, then the two
+halves are swapped. Both arms run the shipped class — the arm labelled *before* is exactly
+`{widths: [4]}` with no local model and no floor — so this compares against the code rather
+than a description of it, and coverage is held fixed, because "answers more often" is not
+"is right more often".
+
+| corpus | held out | positions | before | after, same coverage |
+|---|---|---|---|---|
+| 9 packages, 27 files | express, multer | 2,955 | 15.9% | **30.1%** |
+| express, multer | 9 packages, 27 files | 5,134 | 19.3% | **33.6%** |
+
++14.1 and +14.3 points of exactness, and +16.8 and +16.4 of prefix agreement. Reproduce it:
+
+```sh
+for r in expressjs/body-parser expressjs/compression expressjs/cors expressjs/morgan \
+         expressjs/serve-static expressjs/session pillarjs/finalhandler pillarjs/router \
+         pillarjs/send expressjs/express expressjs/multer; do
+  git clone --depth 1 https://github.com/$r
+done
+
+npm run measure:line -- --exclude '/(test|tests|examples|benchmark|support)/' \
+  ./body-parser ./compression ./cors ./finalhandler ./morgan ./router ./send ./serve-static ./session \
+  -- ./express ./multer
+```
+
+Cloned at HEAD on 2026-09-01: [body-parser `8d6ec0f`](https://github.com/expressjs/body-parser/tree/8d6ec0ff3c34ec3701e502bd582b345fd2846796),
+[compression `ae9b1ae`](https://github.com/expressjs/compression/tree/ae9b1ae1cb73433f71bf7aa8dd022f9146bbcdcf),
+[cors `5317ebe`](https://github.com/expressjs/cors/tree/5317ebe670db2aaebc1d496eb5d33493deefb3ed),
+[finalhandler `577bfbf`](https://github.com/pillarjs/finalhandler/tree/577bfbf00288166b5a069ff78cce60c26b81992f),
+[morgan `286b000`](https://github.com/expressjs/morgan/tree/286b000228cacba362bfa89791c6268663f86610),
+[router `bda4af3`](https://github.com/pillarjs/router/tree/bda4af36c1e66811717b13421579c63029ea2877),
+[send `092f3fc`](https://github.com/pillarjs/send/tree/092f3fc77f0e796519ac328c543c11cced8f2244),
+[serve-static `74be78a`](https://github.com/expressjs/serve-static/tree/74be78a8ffad679edfe135c457ce141114d96fcc),
+[session `96ebea4`](https://github.com/expressjs/session/tree/96ebea4b6cd805584fba04523773b1b918a836d7),
+[express `023767f`](https://github.com/expressjs/express/tree/023767fe9872e029271df1418f73401bff20ff40),
+[multer `a53296b`](https://github.com/expressjs/multer/tree/a53296bbd6d57349bcf56da3b2de5111e1c87c54).
+
+The script refuses to run if the two sides overlap: predicting lines of a file that is in
+the index measures only that a hash table works, and would report a number near 100%.
+
+**That `--exclude` is doing more work than it looks like.** 134 of express's 141 indexable
+files are tests and examples, and test code is far more templated than library code. Leave
+them in and the same eleven repositories answer on 64% of positions instead of 29%, and the
+same change is worth **+25.7** points instead of +14.1. Neither number is wrong; they are
+numbers about different code, which is why the command above is written out in full. Corpus
+choice is the largest free parameter here, exactly as it is in the language table.
+
+**Coverage is where a corpus shows itself.** On this public corpus the index has never seen
+the context at 63% of line positions and says so. On fifteen sibling services generated from
+one template — a private estate, so take the figure as illustration rather than evidence —
+that fell to 23-28%, and the same comparison ran +8.6 and +8.3 rather than +14. The more a
+codebase repeats itself, the more often this answers and the less each answer is worth. A
+high hit rate here means *you have written this before*, which is a fact about the corpus
+and not always a compliment to it.
+
+Two things earned their place:
+
+- **Every context width votes, rather than the longest one that matches.** Widths of four,
+  five and six tokens each contribute a candidate's share of what followed them, weighted
+  by width. Backing off to whichever is longest throws away the fact that the shorter
+  contexts agreed.
+- **The file you are editing is a corpus too.** The lines above your cursor are worth 4.3
+  and 4.0 points of overall accuracy, and lift coverage from 19% to 30%: on a corpus that
+  repeats itself as little as this one, the buffer is proportionally more of what there is
+  to retrieve from. Code repeats locally far more than
+  it repeats globally, and your unsaved buffer is the one corpus the index never has.
+
+Three things did not, written down so nobody has to rediscover them:
+
+- **Templating identifiers into holes** (`const ID = NUM;`) lifts coverage to 97% and costs
+  6.2 points of accuracy. Contexts that match only once their names are erased are usually
+  not the same context.
+- **Recency weighting** on the local model does nothing at any half-life tried (20, 60 and
+  200 lines all landed inside the noise).
+- **Matching indentation** actively hurts, 28.2% against 40.5% - and that was measured with
+  oracle access to the true line's indent, so no better estimate of it will help. A
+  candidate's indentation is a fact about the file it came from, not the one it is going to.
+
+### Two ways to have no answer
+
+**A context that has never been seen is refused outright, and exits 1.** That refusal is
+the point: an index over your own repository must never hand back code your repository does
+not contain, and the provenance is there so a suggestion is checkable rather than merely
+convincing. Narrow contexts were left out of the ranking to protect it - a two-token tail is
+usually punctuation like `);`, which matches nearly any line ever written, and including it
+would take the share of positions where this can honestly say "never seen" from 63-64% down
+to 26-27%. On the private estate that was the whole of the argument, since exactness there
+moved less than a point either way; on the public corpus dropping them also *raises* it,
+26.4% to 29.1% and 26.5% to 30.2%, so the trade turns out to have no cost to weigh.
+
+**A context whose continuations disagree is also withheld**, and says which it was:
+
+```
+$ lexindex ./src --stdin --line
+lexindex: nothing here is likely enough - best of 7 candidate(s) holds 22% of the score,
+          below --min-confidence 0.3
+```
+
+`--min-confidence` is the dial. On the public corpus above, at the default of `0.3` it
+answers on 30.4% and 30.1% of positions across the two splits and is exact on 29.1% and
+30.2%; at `0` it answers on 37.2% and 35.8% and is exact on 23.8% and 25.6%. It prints one
+line for a human to accept, so a wrong line costs more than a missing one - but if you would
+rather see everything, `0` is there.
+
+One honest caveat about what it is good at. The exact hits are largely declarative
+boilerplate - `schema: { type: 'string' },`, `in: 'query',`. A high hit rate here means
+*you have written this before*, which is a fact about your corpus and not always a
+compliment to it.
+
+The table is opt-in: it is a second pass over the same text and costs memory in proportion
+to how much the corpus repeats, so nothing that only completes tokens pays for it. In the
+API it is `buildIndex(dirs, { lineIndex: true })`, and the result carries a `lines` table
+with `lookup(textBefore, { local, minConfidence })` and `candidates(textBefore, { local })`
+for a caller that would rather offer a list - the right line is the top one about 30% of the
+time it answers, and inside the top three about 35%. Build the `local` model with `localIndex(textAboveCursor)`.
+
 ## In your editor
 
 The tool has always said where it belongs (*where no language server runs*) and then shipped one CLI, leaving everybody to build the same bridge. So it ships a language server now, speaking completion and nothing else, over the protocol every editor already knows.
@@ -461,7 +609,51 @@ language-servers = ["typescript-language-server", "lexindex"]
 
 Running it alongside a real language server is the intended arrangement wherever one exists, and the reason is the first entry in *What it cannot do*: this thing is not type-aware, has no idea what is in scope, and loses outright at a `foo.` position. What it contributes is the frequency signal the others have no notion of. Most editors merge completions from several servers, so you get both.
 
-`initializationOptions` takes `lang`, `beta`, `k` and `dirs`, matching the CLI's flags.
+### Whole lines, at a line start
+
+At the start of a line the server also offers the **whole next line**, retrieved from the
+index, each item carrying the file and line it came from:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ },                              lexindex line · 63%          │
+│ format: 'nullable',             lexindex line · 18%          │
+│ format: 'date-time',            lexindex line · 10%          │
+│ properties                      lexindex                     │
+│ format                          lexindex                     │
+└──────────────────────────────────────────────────────────────┘
+  classes/openapi.js:34 — seen 85 time(s)
+```
+
+This is the one place a server with no idea what is in scope has something a type-aware one
+does not: it has read the repository, and it can say *this is what followed here the last
+eighty-five times*. Lines sort above the tokens, and the provenance is in the documentation
+panel so a suggestion is checkable rather than merely convincing.
+
+Three things it will not do, each of which is a way of declining to guess:
+
+- **Only at a line start** (leading whitespace is fine, a half-typed word is not). The table
+  answers "what line followed this context"; half way through `renderWidg` that is not the
+  question, and a whole line there would replace what is already typed.
+- **Only when the context has been seen** — on a held-out measurement it stays silent on
+  roughly two thirds of line positions on a public corpus, and about a quarter on a
+  heavily templated one, rather than inventing anything for them.
+- **Only when the best candidate clears `--min-confidence`** (0.3 by default). A list an
+  editor pops up unbidden is worse than no list.
+
+At most three are offered. The right line is the top one about 30% of the time it clears the
+bar and inside the top three about 35%; past three is where the wrong ones live.
+
+The buffer above your cursor is indexed alongside the repository — the one corpus the
+server never has on disk, and worth 4.3 and 4.0 points of accuracy on the two measured
+splits. Only the last 40 lines, so this is rebuilt per request without re-reading the file.
+
+`--no-line` turns the whole thing off, which also stops the line table being built: it costs
+about 4 MB and a tenth of the build time on a 163-file, 75,000-token corpus. `--min-confidence`
+takes the floor.
+
+`initializationOptions` takes `lang`, `beta`, `k`, `dirs`, `line` and `minConfidence`,
+matching the CLI's flags.
 
 Two details are worth knowing because they are decisions rather than defaults. Completions are identifier-shaped only: the measurements score punctuation because a fair benchmark has to, but a popup offering `;` is noise, and aggregate top-1 is mostly punctuation for every engine including this one. And every item carries a `sortText`, because an editor that re-sorts alphabetically throws away the only thing this server contributes.
 
@@ -489,6 +681,53 @@ autocompletion({ override: [completionSource(docs)] });
 ```
 
 `open` is also the edit: call it again with the new text and that document's counts are swapped rather than the index rebuilt, which costs a document instead of a corpus. `close` takes a document's counts out with it. What this is worth at the document counts a page actually has is the section above, and it is worth reading before wiring this up rather than after, with one document open the cache carries the whole result and `DocumentSet` contributes nothing.
+
+### Whole lines here too, opt-in
+
+`--line` and the language server retrieve whole lines at a line start; the two browser
+adapters do the same, from the documents the page has open:
+
+```js
+const docs = new DocumentSet({ lineIndex: true });   // opt-in
+autocompletion({ override: [completionSource(docs)] });
+```
+
+```
+},                      classes/openapi.js:34 · 64%
+format: 'nullable',     classes/openapi.js:40 · 19%
+format: 'date-time',    classes/openapi.js:81 · 9%
+properties
+format
+```
+
+Lines sort above the tokens — `boost` in CodeMirror, `sortText` in Monaco, for the same
+reason each of those exists at all: an ordering the editor re-sorts is an ordering thrown
+away. The gates are the ones the CLI uses and are enforced in one place, `DocumentSet.lineSuggestions`,
+rather than copied into both adapters: only at a line start, only when the context has been
+seen, only when the best candidate clears `minConfidence`, and at most three.
+
+**In CodeMirror this needs Ctrl-Space.** At a line start there is by definition no prefix,
+and this source already declines to answer an unprompted popup with nothing typed — a line
+list that ignored that would appear every time you pressed Enter or indented. Monaco needs
+no equivalent, because it does not auto-trigger where no word is being typed.
+
+It is opt-in because it costs a second copy of every indexed document's **text**: the line
+table splits lines, and `DocumentSet` otherwise keeps only tokens. Nothing that completes
+tokens alone should pay for that.
+
+The table is rebuilt rather than patched, and only when read after a change. That sounds
+worse than it is: a rebuild is 21 ms over ten open documents, but the case that would make
+it hurt cannot arise. Typing calls `open` for the **active** document, and the active
+document is held out of the index, so typing never dirties the table. What dirties it is a
+tab switch or an edit to some other document, and those happen at human speed.
+
+The text above your cursor is indexed alongside the open documents, which matters more in a
+page than anywhere else: with one document open the rest of the set is empty and the buffer
+is the only corpus there is. It is bounded to the last 40 lines, the same window every
+published number was measured through.
+
+`{ lines: false }` on either adapter turns the items off; `lineLimit` and `minConfidence`
+take the cap and the floor.
 
 ### It keeps the corpus hygiene the file walker keeps
 
@@ -526,6 +765,8 @@ const docs = new DocumentSet({
 `activate(id)` takes that document out and puts the previous one back. It is the one decision here worth arguing with, so: the buffer is already served by the cache half of the blend, which reads the text above the cursor and nothing below it. Indexing the active document too would hand the completer the rest of the file, including the continuation it is being asked to predict, and every accuracy in this README was measured with the edited document held out. An index that quietly saw the answer would report a number nobody could reproduce from the harness.
 
 An embedding with exactly one document therefore has an empty index and is served entirely by the cache, which is not a degenerate case but the measured one, and the one that still beats `completeAnyWord` by 35.2% to 27.7% (z=9.01).
+
+The line table follows the same rule, and has to: it is a table of *what line came next*, so an active document inside it would be handing back the very line it was asked to predict. With one document open there is no line table worth the name either, and whole-line suggestions come from the text above the cursor alone.
 
 ### Monaco
 
