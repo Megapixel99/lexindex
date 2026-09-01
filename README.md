@@ -417,6 +417,53 @@ Suggestions go to stdout one per line and everything else goes to stderr, so the
 
 `--ext` and `--exclude` exist because corpus choice is the largest free parameter in a completion benchmark, and the README above spends a numbered point on the three separate ways it inflated this project's own headline. If you widen the net past the defaults, say what you indexed when you quote the number.
 
+## A whole line, retrieved rather than guessed
+
+`--line` answers a different question from the rest of this tool: not *what token comes
+next*, but *what line came next, last time you were here*.
+
+```
+$ lexindex ./src --stdin --line
+schema: { type: 'string' },
+  src/routes/api/v1/graphQL/get.js:14 - seen 10 of 34 time(s), 15 other(s) here
+```
+
+It does not generate. Running the token completer on its own output was measured over 883
+positions on a corpus of seven sibling services, and it decays about geometrically:
+
+| tokens ahead | exact |
+|---|---|
+| 1 | 43.0% |
+| 3 | 19.7% |
+| 5 | 11.4% |
+| 10 | **3.1%** |
+
+Ten tokens is roughly a line, so a generated line is right about three times in a hundred.
+That is not a tuning problem: an order-5 model conditions on four tokens, and after a few
+self-generated steps the context is mostly its own output.
+
+So `--line` remembers instead. For each four-token context it keeps the lines that actually
+followed it in the corpus and returns the most frequent, **with the file and line it came
+from**. On the same corpus:
+
+- it offers a line on **53.8%** of line positions
+- when it offers one, it is exact **24.7%** of the time
+
+**When the context has not been seen it says so and exits 1.** That refusal is the point.
+An index over your own repository must never hand back code your repository does not
+contain, and the provenance is there so a suggestion is checkable rather than merely
+convincing.
+
+One honest caveat about what it is good at. On the corpus above, the exact hits were almost
+all declarative boilerplate - `schema: { type: 'string' },`, `in: 'query',`. A high hit rate
+here means *you have written this before*, which is a fact about the corpus and not always a
+compliment to it.
+
+The table is opt-in: it is a second pass over the same text and costs memory in proportion
+to how much the corpus repeats, so nothing that only completes tokens pays for it. In the
+API it is `buildIndex(dirs, { lineIndex: true })`, and the result carries a `lines` table
+with `lookup(textBefore)`.
+
 ## In your editor
 
 The tool has always said where it belongs (*where no language server runs*) and then shipped one CLI, leaving everybody to build the same bridge. So it ships a language server now, speaking completion and nothing else, over the protocol every editor already knows.

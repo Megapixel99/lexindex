@@ -26,6 +26,7 @@ let k = 5;
 let stats = false;
 let json = false;
 let wordsOnly = false;
+let lineMode = false;
 let useStdin = false;
 let beta = 0.5;
 let recitalOf = null;
@@ -49,6 +50,9 @@ function usage() {
     --words                       identifier-shaped suggestions only, as every editor
                                   integration does; punctuation is kept by default so
                                   a measurement stays a fair one
+    --line                        the whole NEXT LINE, retrieved from the corpus with
+                                  the file and line it came from; exits 1 and says so
+                                  when this context has not been seen
     --stats                       report what the index holds
     --recital <file>              just the recital rate of <file> against the index
   index
@@ -95,6 +99,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "--recital") recitalOf = value(a, i++);
   else if (a === "--stats") stats = true;
   else if (a === "--words") wordsOnly = true;
+  else if (a === "--line") lineMode = true;
   else if (a === "--json") json = true;
   else if (a === "--stdin") useStdin = true;
   else if (a === "--skip-generated") skipGenerated = true;
@@ -146,6 +151,7 @@ if (excludeRe !== null) {
 }
 if (maxBytes !== null) buildOpts.maxBytes = maxBytes;
 buildOpts.skipGenerated = skipGenerated;
+buildOpts.lineIndex = lineMode;
 
 const built = buildIndex(dirs, buildOpts);
 
@@ -338,6 +344,27 @@ const before = text.slice(0, offset);
 // reading a list wants the identifiers, which is what every editor integration shows
 // and what `--words` asks for here -- through the same helper, so the CLI and the
 // editors cannot drift.
+// A whole line is RETRIEVED, never assembled token by token: greedy extension of this
+// model is exact 3.1% of the time at ten tokens, which is about a line. When the context
+// has not been seen the honest answer is to say nothing, so this exits 1 rather than
+// offering something the corpus never contained.
+if (lineMode) {
+  const hit = built.lines.lookup(before);
+  if (json) {
+    console.log(JSON.stringify({ line: hit, recital, band: band(recital), offset, index: indexReport }));
+    process.exit(hit ? 0 : 1);
+  }
+  console.error(`(recital ${(recital * 100).toFixed(1)}% \u2014 ${band(recital)})`);
+  if (!hit) {
+    console.error("lexindex: this context has not been seen \u2014 no line to retrieve");
+    process.exit(1);
+  }
+  console.log(hit.text);
+  const others = hit.alternatives > 1 ? `, ${hit.alternatives - 1} other(s) here` : "";
+  console.error(`  ${hit.file}:${hit.line} \u2014 seen ${hit.count} of ${hit.total} time(s)${others}`);
+  process.exit(0);
+}
+
 const scored = wordsOnly
   ? topWords(completer, before, k)
   : completer.completeScored(before, { k });

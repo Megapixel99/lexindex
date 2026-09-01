@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { lex } from "./lex.js";
+import { LineIndex } from "./line-index.js";
 import { CountModel } from "./count-model.js";
 import { LANGUAGES, COMMON_SKIP_DIRS, resolveLanguages } from "./languages.js";
 import { isLikelyGenerated } from "./generated.js";
@@ -135,10 +136,17 @@ export function collectFiles(dir, options = {}) {
  *   tokensByFile: Map<string, string[]>|null}}
  */
 export function buildIndex(dirs, options = {}) {
-  const { order = 5, exclude = null, retainFileTokens = false, skipGenerated = false } = options;
+  const {
+    order = 5, exclude = null, retainFileTokens = false, skipGenerated = false,
+    lineIndex = false,
+  } = options;
   const roots = Array.isArray(dirs) ? dirs : [dirs];
 
   const model = new CountModel(order);
+  // Opt-in: the line table is a second pass over the same text and costs memory
+  // proportional to how much the corpus repeats. Nothing that only completes
+  // tokens should pay for it.
+  const lines = lineIndex ? new LineIndex() : null;
   const started = Date.now();
   const tokensByFile = retainFileTokens ? new Map() : null;
   let candidates = 0;
@@ -177,13 +185,16 @@ export function buildIndex(dirs, options = {}) {
     if (tokens.length) {
       model.addFileTokens(tokens);
       if (tokensByFile) tokensByFile.set(path.resolve(file), tokens);
+      if (lines) lines.addFile(file, text);
     }
   }
 
   model.finalize();
+  if (lines) lines.finalize();
 
   return {
     index: model,
+    lines,
     files: model.nFiles,
     tokens: model.nTokens,
     skipped,
