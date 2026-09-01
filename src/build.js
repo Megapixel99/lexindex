@@ -39,6 +39,13 @@ const DEFAULT_MAX_BYTES = 400_000;
  * either. So files are keyed on the real path, and the first spelling seen is the one
  * returned.
  *
+ * A root that is not a readable directory is recorded on `.missing` rather than walked
+ * or thrown on. Deep inside the walk an unreadable entry is routine — a permission
+ * denied under someone's tree should not abort the corpus — but a root is a path the
+ * caller typed, and a typo there silently shrinks the corpus into one that reports
+ * numbers about different code. The caller decides how loud to be; this only refuses
+ * to lose the fact.
+ *
  * @param {string|string[]} dir one directory, or several treated as one corpus
  */
 export function collectFiles(dir, options = {}) {
@@ -53,6 +60,7 @@ export function collectFiles(dir, options = {}) {
   const roots = Array.isArray(dir) ? dir : [dir];
   const out = [];
   const seen = new Map(); // real path -> the spelling that got there first
+  const missing = [];
   let duplicates = 0;
 
   const identity = (p) => {
@@ -64,11 +72,22 @@ export function collectFiles(dir, options = {}) {
   };
 
   (function walkAll() {
-    for (const root of roots) walk(root, 0);
+    for (const root of roots) {
+      let st = null;
+      try {
+        st = fs.statSync(root);
+      } catch {}
+      if (!st || !st.isDirectory()) {
+        missing.push(root);
+        continue;
+      }
+      walk(root, 0);
+    }
   })();
   // Non-enumerable so that spreading, iterating or serialising the list behaves exactly
-  // as it did before this counter existed; it is metadata about the walk, not a file.
+  // as it did before these existed; they are metadata about the walk, not files.
   Object.defineProperty(out, "duplicates", { value: duplicates, enumerable: false });
+  Object.defineProperty(out, "missing", { value: missing, enumerable: false });
   return out;
 
   function walk(d, depth) {
@@ -112,7 +131,7 @@ export function collectFiles(dir, options = {}) {
  * long-lived editor process does.
  *
  * @returns {{index: CountModel, files: number, tokens: number, ms: number, skipped: number,
- *   candidates: number, duplicates: number, generated: number,
+ *   candidates: number, duplicates: number, missing: string[], generated: number,
  *   tokensByFile: Map<string, string[]>|null}}
  */
 export function buildIndex(dirs, options = {}) {
@@ -170,6 +189,7 @@ export function buildIndex(dirs, options = {}) {
     skipped,
     candidates,
     duplicates: files.duplicates,
+    missing: files.missing,
     generated,
     tokensByFile,
     ms: Date.now() - started,

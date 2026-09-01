@@ -293,8 +293,8 @@ What the incumbents do instead is worth knowing, because it is what the numbers 
 
 | | |
 |---|---|
-| `buildIndex(dirs, opts)` | `{ index, files, tokens, ms, candidates, skipped, duplicates, tokensByFile }` |
-| `collectFiles(dirs, opts)` | one directory or several as one corpus; deduplicated by real path, with `.duplicates` |
+| `buildIndex(dirs, opts)` | `{ index, files, tokens, ms, candidates, skipped, duplicates, missing, tokensByFile }` |
+| `collectFiles(dirs, opts)` | one directory or several as one corpus; deduplicated by real path, with `.duplicates` and `.missing` for roots that were not readable directories |
 | `isLikelyGenerated(text, file)` | `false`, `"name"` or `"marker"`; `buildIndex` reports `generated` and takes `skipGenerated` |
 | `new Completer(index, { cacheBeta })` | `cacheBeta` 0 is repo only, 1 is buffer only, default 0.5 |
 | `completer.complete(textBeforeCursor, { k })` | lexes, finds the partial identifier, updates the buffer |
@@ -550,7 +550,7 @@ Both make the same three decisions, and they are the language server's. **The ra
 |---|---|
 | `0` | ran, produced output |
 | `1` | ran, nothing to suggest |
-| `2` | could not run, or could not measure: a usage error, an unreadable file, an index of zero files, too few files to hold any out, zero scored positions, or a scorer never observed producing both a hit and a miss |
+| `2` | could not run, or could not measure: a usage error, an unreadable file, a root that is not a readable directory, an index of zero files, too few files to hold any out, zero scored positions, or a scorer never observed producing both a hit and a miss |
 
 The third exists because a clean result from an instrument that could not fail is worth nothing; `measure` and `opendocs` both refuse rather than printing a number they cannot support.
 

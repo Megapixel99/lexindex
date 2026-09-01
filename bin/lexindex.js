@@ -142,6 +142,37 @@ if (maxBytes !== null) buildOpts.maxBytes = maxBytes;
 buildOpts.skipGenerated = skipGenerated;
 
 const built = buildIndex(dirs, buildOpts);
+
+// A root that is not a readable directory is refused by name, even when the other roots
+// produced files. Quietly indexing a smaller corpus than the one asked for reports
+// numbers about different code, and a wrong number said confidently is the one failure
+// this project refuses everywhere.
+if (built.missing.length > 0) {
+  for (const m of built.missing) {
+    console.error(`lexindex: not a directory: ${m}`);
+    // The way several paths arrive fused into one argument is a shell that did not
+    // split them — zsh leaves an unquoted $var whole where bash breaks it on spaces.
+    // When every piece of the fused argument exists, say so: the fix is one keystroke
+    // away and invisible from the generic message.
+    const parts = m.split(/\s+/).filter(Boolean);
+    if (parts.length > 1 && parts.every(isDirectory)) {
+      console.error(
+        `          this one argument holds ${parts.length} paths that all exist — ` +
+          `a shell variable can arrive unsplit (zsh does not split unquoted variables); ` +
+          `pass each directory as its own argument.`
+      );
+    }
+  }
+  process.exit(2);
+}
+function isDirectory(p) {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 if (built.files === 0) {
   console.error("lexindex: indexed 0 files — nothing to complete from.");
   console.error(
