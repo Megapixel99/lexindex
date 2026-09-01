@@ -29,7 +29,8 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { buildIndex, updateIndexFile } from "../src/build.js";
 import { Completer } from "../src/completer.js";
-import { isWord, lex } from "../src/lex.js";
+import { lex } from "../src/lex.js";
+import { topWords } from "../src/identifiers.js";
 import { recitalBand } from "../src/count-model.js";
 import { resolveLanguages } from "../src/languages.js";
 
@@ -320,13 +321,12 @@ function handle(msg) {
       const offset = offsetAt(doc.text, params.position);
       const before = doc.text.slice(0, offset);
 
-      // Ask for more than we need and keep the identifier-shaped ones. The measurements
-      // score punctuation because a fair benchmark must, but a completion popup offering
-      // `;` is noise, and aggregate top-1 is mostly punctuation for every engine.
-      const scored = doc.session.completeScored(before, { k: k * 4 });
+      // Identifier-shaped suggestions only -- see identifiers.js for why, and for the
+      // overshoot this used to spell out here. Keeping the rule in one place is the
+      // point of that module: it was extracted FROM this handler, and a second copy
+      // here is how the two quietly stop agreeing.
       const items = [];
-      for (const entry of scored) {
-        if (!isWord(entry.token)) continue;
+      for (const entry of topWords(doc.session, before, k)) {
         items.push({
           label: entry.token,
           kind: 1, // Text: this server genuinely does not know what the token is
@@ -336,7 +336,6 @@ function handle(msg) {
           filterText: entry.token,
           detail: "lexindex",
         });
-        if (items.length >= k) break;
       }
       reply(id, { isIncomplete: true, items });
       return;

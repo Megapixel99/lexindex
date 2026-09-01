@@ -14,6 +14,7 @@
 import fs from "node:fs";
 import { buildIndex } from "../src/build.js";
 import { Completer } from "../src/completer.js";
+import { topWords } from "../src/identifiers.js";
 import { lex } from "../src/lex.js";
 import { recitalBand as band } from "../src/count-model.js";
 import { resolveLanguages, LANGUAGE_NAMES } from "../src/languages.js";
@@ -24,6 +25,7 @@ let at = null;
 let k = 5;
 let stats = false;
 let json = false;
+let wordsOnly = false;
 let useStdin = false;
 let beta = 0.5;
 let recitalOf = null;
@@ -44,6 +46,9 @@ function usage() {
   output
     -k <n>                        how many suggestions (default 5)
     --json                        one JSON object: suggestions, scores, recital, index
+    --words                       identifier-shaped suggestions only, as every editor
+                                  integration does; punctuation is kept by default so
+                                  a measurement stays a fair one
     --stats                       report what the index holds
     --recital <file>              just the recital rate of <file> against the index
   index
@@ -89,6 +94,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "--max-bytes") maxBytes = Number(value(a, i++));
   else if (a === "--recital") recitalOf = value(a, i++);
   else if (a === "--stats") stats = true;
+  else if (a === "--words") wordsOnly = true;
   else if (a === "--json") json = true;
   else if (a === "--stdin") useStdin = true;
   else if (a === "--skip-generated") skipGenerated = true;
@@ -327,7 +333,14 @@ function offsetOfLineCol(src, line, col) {
 const recital = built.index.recitalRate(lex(text));
 const completer = new Completer(built.index, { cacheBeta: beta });
 const before = text.slice(0, offset);
-const scored = completer.completeScored(before, { k });
+// Punctuation is kept by default: aggregate top-1 is mostly punctuation for every
+// engine, and a measurement that quietly dropped it would flatter this one. A person
+// reading a list wants the identifiers, which is what every editor integration shows
+// and what `--words` asks for here -- through the same helper, so the CLI and the
+// editors cannot drift.
+const scored = wordsOnly
+  ? topWords(completer, before, k)
+  : completer.completeScored(before, { k });
 
 if (json) {
   console.log(
