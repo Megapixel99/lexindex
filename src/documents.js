@@ -39,12 +39,25 @@
  * short version, because it decides how much of this is worth wiring up: with one
  * document open the cache carries the whole result and this class contributes nothing,
  * and from the first OTHER open document the index starts paying.
+ *
+ * WHOLE LINES ARE OPT-IN, with `new DocumentSet({ lineIndex: true })`, matching
+ * `buildIndex(dirs, { lineIndex: true })`. They cost a second copy of every indexed
+ * document's TEXT, because the line table splits lines and this class otherwise keeps only
+ * tokens — a real cost in a page, and one nothing that merely completes tokens should pay.
+ *
+ * The table is rebuilt rather than patched, and lazily, which sounds worse than it is. A
+ * rebuild is 21 ms over ten open documents, but the case that would make that hurt cannot
+ * arise: typing calls `open` for the ACTIVE document, and the active document is held out
+ * of the index, so it never dirties the table. What dirties it is a tab switch or an edit
+ * to some OTHER document, and those happen at human speed. The flag is set from `_apply`,
+ * which already computes whether the indexed set actually changed.
  */
 
 import { lex } from "./lex.js";
 import { CountModel, recitalBand } from "./count-model.js";
 import { Completer } from "./completer.js";
 import { isLikelyGenerated } from "./generated.js";
+import { LineIndex, localIndexFor, atLineStart, DEFAULT_MIN_CONFIDENCE } from "./line-index.js";
 
 /**
  * The file walker's ceiling, in characters rather than bytes.
@@ -59,7 +72,7 @@ const DEFAULT_MAX_LENGTH = 400_000;
 
 export class DocumentSet {
   /**
-   * @param {{order?: number, maxLength?: number, skipGenerated?: boolean,
+   * @param {{order?: number, maxLength?: number, skipGenerated?: boolean, lineIndex?: boolean,
    *          onRecital?: ((e: {id: any, rate: number, band: string, reason: string}) => void)|null,
    *          onExcluded?: ((e: {id: any, reason: string, length: number}) => void)|null}} [options]
    */
@@ -67,6 +80,7 @@ export class DocumentSet {
     order = 5,
     maxLength = DEFAULT_MAX_LENGTH,
     skipGenerated = false,
+    lineIndex = false,
     onRecital = null,
     onExcluded = null,
   } = {}) {
@@ -92,6 +106,15 @@ export class DocumentSet {
     this.skipGenerated = skipGenerated;
     this.onRecital = onRecital;
     this.onExcluded = onExcluded;
+
+    /** Whether whole-line retrieval is on at all. Off, none of the below costs anything. */
+    this.lineIndexEnabled = lineIndex;
+    /** id -> text, kept only when the line table needs it, since it splits lines not tokens. */
+    this.texts = lineIndex ? new Map() : null;
+    /** @type {LineIndex|null} built on demand, from `lines`. */
+    this._lines = null;
+    /** Set by `_apply` whenever the indexed set actually changed. */
+    this._linesDirty = true;
   }
 
   /** How many documents are open, the active and excluded ones included. */
@@ -122,6 +145,8 @@ export class DocumentSet {
     // A document kept out on length is not lexed either. Lexing a five-megabyte bundle to
     // then throw the tokens away is the cost this ceiling exists to avoid.
     this.tokens.set(id, reason === "size" ? [] : lex(text));
+    // The same ceiling applies: a document too long to lex is too long to keep a copy of.
+    if (this.texts) this.texts.set(id, reason === "size" ? "" : text);
     if (reason) {
       this.excluded.set(id, reason);
       if (this.onExcluded) this.onExcluded({ id, reason, length: text.length });
@@ -136,6 +161,7 @@ export class DocumentSet {
   close(id) {
     if (!this.tokens.has(id)) return this;
     this.tokens.delete(id);
+    if (this.texts) this.texts.delete(id);
     this.excluded.delete(id);
     this.generated.delete(id);
     if (id === this.activeId) this.activeId = null;
@@ -185,6 +211,55 @@ export class DocumentSet {
     return this.index.recitalRate(lex(text));
   }
 
+  /**
+   * The line table over every open document except the active one, or null when off.
+   *
+   * Built on first use and after any change to the indexed set, never during one. Reading
+   * this is what pays for it, so a page that only completes tokens never does.
+   */
+  get lines() {
+    if (!this.lineIndexEnabled) return null;
+    if (this._lines && !this._linesDirty) return this._lines;
+    const ix = new LineIndex();
+    for (const [id, text] of this.texts) {
+      // Exactly the documents the count model holds: the active one is out, for the reason
+      // at the top of this file, and so is anything excluded on size or generation.
+      if (this._wanted(id) === null) continue;
+      ix.addFile(typeof id === "string" ? id : String(id), text);
+    }
+    this._lines = ix.finalize();
+    this._linesDirty = false;
+    return this._lines;
+  }
+
+  /**
+   * Whole-line candidates for a cursor, or none — the one gate both editor adapters use.
+   *
+   * Kept here rather than in `codemirror.js` and `monaco.js` for the reason `topWords`
+   * exists: two copies of a rule are two rules, and these three conditions are each a way
+   * of declining to guess.
+   *
+   * - Only at the start of a line. The table answers "what line followed this context";
+   *   half way through a word that is not the question, and a whole line would replace
+   *   what is already typed.
+   * - Only when the context has been seen at all.
+   * - Only when the best candidate holds `minConfidence` of the score.
+   *
+   * The text above the cursor is indexed alongside the open documents. In a page that
+   * matters more than anywhere else: with one document open, the rest of the set is empty
+   * and the buffer above the cursor is the only corpus there is.
+   *
+   * @param {string} textBefore everything above the cursor
+   * @param {{minConfidence?: number, limit?: number}} [options]
+   */
+  lineSuggestions(textBefore, { minConfidence = DEFAULT_MIN_CONFIDENCE, limit = 3 } = {}) {
+    const table = this.lines;
+    if (!table || !atLineStart(textBefore)) return [];
+    const ranked = table.candidates(textBefore, { local: localIndexFor(textBefore) });
+    if (ranked.length === 0 || ranked[0].confidence < minConfidence) return [];
+    return ranked.slice(0, limit);
+  }
+
   /** What the index should hold for `id` right now, or null if it should hold nothing. */
   _wanted(id) {
     if (id === null || id === this.activeId) return null;
@@ -208,6 +283,10 @@ export class DocumentSet {
       changes.push({ id, current, wanted });
     }
     if (changes.length === 0) return;
+    // The indexed set moved, so the line table describes documents that are no longer the
+    // ones it should. Typing never reaches here for the active document, which is what
+    // makes rebuilding rather than patching affordable.
+    this._linesDirty = true;
 
     this.index.reopen();
     for (const { current } of changes) if (current) this.index.removeFileTokens(current);

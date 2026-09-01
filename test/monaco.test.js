@@ -245,3 +245,72 @@ describe("the Monaco provider — what it touches, and what it follows", () => {
     assert.deepEqual(ask(), [], "and taken back out when it takes the cursor");
   });
 });
+
+
+describe("the Monaco provider — whole lines", () => {
+  const PAIR = "const config = loadConfig();\nconfig.enabled = true;\n";
+  const CURSOR = "const config = loadConfig();\n";
+
+  const lineSet = () => {
+    const docs = new DocumentSet({ lineIndex: true });
+    docs.open("doc0.js", PAIR);
+    docs.open("doc1.js", PAIR);
+    return docs;
+  };
+
+  test("at a line start it offers whole lines, sorted above the tokens", () => {
+    const provider = completionProvider(lineSet());
+    const { model, position } = editorAt(CURSOR);
+    const { suggestions } = provider.provideCompletionItems(model, position);
+    assert.equal(suggestions[0].label, "config.enabled = true;", `got ${JSON.stringify(suggestions.map((x) => x.label))}`);
+    const sorts = suggestions.map((x) => x.sortText);
+    assert.deepEqual(sorts, [...sorts].sort(), "sortText must order lines above words");
+  });
+
+  test("a line item carries the document and line it came from", () => {
+    const provider = completionProvider(lineSet());
+    const { model, position } = editorAt(CURSOR);
+    const [first] = provider.provideCompletionItems(model, position).suggestions;
+    assert.match(first.documentation, /doc0\.js:2/, `got ${first.documentation}`);
+    assert.match(first.detail, /^lexindex line \u00b7 \d+%$/, `got ${first.detail}`);
+  });
+
+  test("the insert range is empty at a line start, so nothing is overwritten", () => {
+    // There is no partial word to replace, and a range that swallowed the indentation
+    // would delete it on accept.
+    const provider = completionProvider(lineSet());
+    const { model, position } = editorAt(CURSOR);
+    const [first] = provider.provideCompletionItems(model, position).suggestions;
+    assert.equal(first.range.startColumn, first.range.endColumn);
+  });
+
+  test("mid-identifier there are no line items, only words", () => {
+    // A smoke check that the two kinds coexist. What actually pins the guard is the
+    // DocumentSet test that builds a corpus able to answer mid-word; both adapters call
+    // the same `lineSuggestions`, so the rule is tested once rather than approximated twice.
+    const provider = completionProvider(lineSet());
+    const text = "const config = loadConfig();\nconfig.ena";
+    const { model, position } = editorAt(text);
+    const { suggestions } = provider.provideCompletionItems(model, position);
+    assert.ok(suggestions.length > 0, "words are still offered");
+    assert.ok(
+      suggestions.every((x) => x.detail === "lexindex"),
+      `a line was offered mid-word: ${JSON.stringify(suggestions.map((x) => x.label))}`,
+    );
+  });
+
+  test("lines: false turns them off and leaves the words alone", () => {
+    const provider = completionProvider(lineSet(), { lines: false });
+    const { model, position } = editorAt(CURSOR);
+    const { suggestions } = provider.provideCompletionItems(model, position);
+    assert.ok(suggestions.length > 0);
+    assert.ok(suggestions.every((x) => x.detail === "lexindex"));
+  });
+
+  test("kind is still absent rather than guessed, on line items too", () => {
+    const provider = completionProvider(lineSet());
+    const { model, position } = editorAt(CURSOR);
+    const [first] = provider.provideCompletionItems(model, position).suggestions;
+    assert.equal(first.kind, undefined, "no monaco namespace was passed, so no kind");
+  });
+});

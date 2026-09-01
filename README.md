@@ -634,6 +634,53 @@ autocompletion({ override: [completionSource(docs)] });
 
 `open` is also the edit: call it again with the new text and that document's counts are swapped rather than the index rebuilt, which costs a document instead of a corpus. `close` takes a document's counts out with it. What this is worth at the document counts a page actually has is the section above, and it is worth reading before wiring this up rather than after, with one document open the cache carries the whole result and `DocumentSet` contributes nothing.
 
+### Whole lines here too, opt-in
+
+`--line` and the language server retrieve whole lines at a line start; the two browser
+adapters do the same, from the documents the page has open:
+
+```js
+const docs = new DocumentSet({ lineIndex: true });   // opt-in
+autocompletion({ override: [completionSource(docs)] });
+```
+
+```
+},                      classes/openapi.js:34 · 64%
+format: 'nullable',     classes/openapi.js:40 · 19%
+format: 'date-time',    classes/openapi.js:81 · 9%
+properties
+format
+```
+
+Lines sort above the tokens — `boost` in CodeMirror, `sortText` in Monaco, for the same
+reason each of those exists at all: an ordering the editor re-sorts is an ordering thrown
+away. The gates are the ones the CLI uses and are enforced in one place, `DocumentSet.lineSuggestions`,
+rather than copied into both adapters: only at a line start, only when the context has been
+seen, only when the best candidate clears `minConfidence`, and at most three.
+
+**In CodeMirror this needs Ctrl-Space.** At a line start there is by definition no prefix,
+and this source already declines to answer an unprompted popup with nothing typed — a line
+list that ignored that would appear every time you pressed Enter or indented. Monaco needs
+no equivalent, because it does not auto-trigger where no word is being typed.
+
+It is opt-in because it costs a second copy of every indexed document's **text**: the line
+table splits lines, and `DocumentSet` otherwise keeps only tokens. Nothing that completes
+tokens alone should pay for that.
+
+The table is rebuilt rather than patched, and only when read after a change. That sounds
+worse than it is: a rebuild is 21 ms over ten open documents, but the case that would make
+it hurt cannot arise. Typing calls `open` for the **active** document, and the active
+document is held out of the index, so typing never dirties the table. What dirties it is a
+tab switch or an edit to some other document, and those happen at human speed.
+
+The text above your cursor is indexed alongside the open documents, which matters more in a
+page than anywhere else: with one document open the rest of the set is empty and the buffer
+is the only corpus there is. It is bounded to the last 40 lines, the same window every
+published number was measured through.
+
+`{ lines: false }` on either adapter turns the items off; `lineLimit` and `minConfidence`
+take the cap and the floor.
+
 ### It keeps the corpus hygiene the file walker keeps
 
 `collectFiles` skips a file over 400 KB, because minified bundles and generated dumps repeat themselves enormously and repetition is exactly what this measures: point 3 of *What it cannot do*, and the reason that ceiling exists at all. A page has no `stat` to consult, but it has the string, so `DocumentSet` applies the same ceiling to its length. A tab holding a vendored bundle would otherwise walk into the index and make every suggestion quietly worse, which is the failure that looks exactly like the tool simply not being very good.
@@ -670,6 +717,8 @@ const docs = new DocumentSet({
 `activate(id)` takes that document out and puts the previous one back. It is the one decision here worth arguing with, so: the buffer is already served by the cache half of the blend, which reads the text above the cursor and nothing below it. Indexing the active document too would hand the completer the rest of the file, including the continuation it is being asked to predict, and every accuracy in this README was measured with the edited document held out. An index that quietly saw the answer would report a number nobody could reproduce from the harness.
 
 An embedding with exactly one document therefore has an empty index and is served entirely by the cache, which is not a degenerate case but the measured one, and the one that still beats `completeAnyWord` by 35.2% to 27.7% (z=9.01).
+
+The line table follows the same rule, and has to: it is a table of *what line came next*, so an active document inside it would be handing back the very line it was asked to predict. With one document open there is no line table worth the name either, and whole-line suggestions come from the text above the cursor alone.
 
 ### Monaco
 

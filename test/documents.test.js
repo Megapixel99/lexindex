@@ -18,6 +18,7 @@ import { lex } from "../src/lex.js";
 import { CountModel, recitalBand } from "../src/count-model.js";
 import { Completer } from "../src/completer.js";
 import { DocumentSet } from "../src/documents.js";
+import { DEFAULT_MIN_CONFIDENCE } from "../src/line-index.js";
 
 /** A total ordering of everything a model counted, so two models can be compared. */
 function dump(m) {
@@ -369,5 +370,142 @@ describe("DocumentSet — saying what it is doing", () => {
     docs.open("a.js", A).activate("a.js");
     docs.open("bundle.js", "x".repeat(500_000));
     assert.equal(docs.size, 2);
+  });
+});
+
+
+describe("the line table over open documents", () => {
+  // Two documents in which the same line follows the same context, so the table has
+  // something decided to say rather than a coin flip.
+  const PAIR = "const config = loadConfig();\nconfig.enabled = true;\n";
+  const CURSOR = "const config = loadConfig();\n";
+
+  const setWith = (...texts) => {
+    const docs = new DocumentSet({ lineIndex: true });
+    texts.forEach((t, i) => docs.open(`doc${i}.js`, t));
+    return docs;
+  };
+
+  test("it is off unless asked for, and then costs nothing", () => {
+    // A second copy of every document's text is a real cost in a page; nothing that only
+    // completes tokens should pay it.
+    const docs = new DocumentSet();
+    docs.open("a.js", PAIR);
+    assert.equal(docs.lines, null, "no line table unless lineIndex was asked for");
+    assert.equal(docs.texts, null, "and no text kept for one");
+    assert.deepEqual(docs.lineSuggestions(CURSOR), []);
+  });
+
+  test("it retrieves a line another open document held", () => {
+    const docs = setWith(PAIR, PAIR);
+    const [best] = docs.lineSuggestions(CURSOR);
+    assert.ok(best, "expected a candidate from the open set");
+    assert.equal(best.text, "config.enabled = true;");
+    assert.equal(best.file, "doc0.js", "provenance names the document it came from");
+  });
+
+  test("THE ACTIVE DOCUMENT IS NOT IN THE LINE TABLE", () => {
+    // The same rule the count model follows, and for the same reason: indexing the
+    // document being edited would feed back the continuation it is being asked to
+    // predict, and every number this package publishes was measured with it held out.
+    const docs = setWith(PAIR);
+    assert.ok(docs.lineSuggestions(CURSOR).length > 0, "one other document, so it answers");
+    docs.activate("doc0.js");
+    assert.deepEqual(docs.lineSuggestions(CURSOR), [], "now the only document holds the cursor");
+    docs.activate(null);
+    assert.ok(docs.lineSuggestions(CURSOR).length > 0, "and it comes back when the cursor leaves");
+  });
+
+  test("an excluded document is not in it either", () => {
+    const docs = new DocumentSet({ lineIndex: true, maxLength: 10 });
+    docs.open("huge.js", PAIR);
+    assert.equal(docs.excluded.get("huge.js"), "size");
+    assert.deepEqual(docs.lineSuggestions(CURSOR), [], "too long to index is too long to retrieve from");
+  });
+
+  test("typing in the active document does not rebuild the table", () => {
+    // The whole reason rebuilding rather than patching is affordable. `open` on the
+    // active document cannot change what the table holds, so it must not invalidate it.
+    const docs = setWith(PAIR, PAIR);
+    docs.activate("doc1.js");
+    const first = docs.lines;
+    docs.open("doc1.js", PAIR + "let typing = 1;\n");
+    docs.open("doc1.js", PAIR + "let typingMo = 1;\n");
+    assert.equal(docs.lines, first, "the same table object, not a rebuild");
+  });
+
+  test("switching documents does rebuild it", () => {
+    const docs = setWith(PAIR, PAIR);
+    const first = docs.lines;
+    docs.activate("doc0.js");
+    assert.notEqual(docs.lines, first, "doc0 left the index, so the table must follow");
+  });
+
+  test("closing a document takes its lines with it", () => {
+    const docs = setWith(PAIR);
+    assert.ok(docs.lineSuggestions(CURSOR).length > 0);
+    docs.close("doc0.js");
+    assert.deepEqual(docs.lineSuggestions(CURSOR), []);
+  });
+
+  test("mid-identifier it offers nothing, even when the table has an answer ready", () => {
+    // Contrived on purpose. A half-typed word changes the token tail, so the usual
+    // mid-word position matches nothing and a test there would pass with the guard
+    // removed -- proving only that the table was empty. This corpus contains the partial
+    // text as a real line, so the tail DOES match and the only thing withholding the
+    // suggestion is `atLineStart`. Take the guard out and this fails.
+    const docs = new DocumentSet({ lineIndex: true });
+    const trap = "const config = loadConfig();\nconfig.ena\nafterEna();\n";
+    docs.open("a.js", trap);
+    docs.open("b.js", trap);
+    const midWord = "const config = loadConfig();\nconfig.ena";
+
+    assert.ok(
+      docs.lines.candidates(midWord).length > 0,
+      "the fixture must actually have something to offer at this position",
+    );
+    assert.deepEqual(docs.lineSuggestions(midWord), [], "a half-typed word is not a line start");
+    assert.ok(docs.lineSuggestions(CURSOR).length > 0, "and the same set answers at a line start");
+  });
+
+  test("indentation before the cursor is still a line start", () => {
+    const docs = setWith(PAIR, PAIR);
+    assert.ok(docs.lineSuggestions(CURSOR + "  ").length > 0);
+  });
+
+  test("a floor nothing clears withholds everything", () => {
+    const docs = setWith(PAIR, PAIR);
+    assert.deepEqual(docs.lineSuggestions(CURSOR, { minConfidence: 1.01 }), []);
+    assert.ok(docs.lineSuggestions(CURSOR, { minConfidence: 0 }).length > 0);
+  });
+
+  test("the list is capped, however many continuations exist", () => {
+    const docs = new DocumentSet({ lineIndex: true });
+    for (let i = 0; i < 6; i++) docs.open(`d${i}.js`, `const config = loadConfig();\nbranch${i}();\n`);
+    const all = docs.lines.candidates(CURSOR);
+    assert.equal(all.length, 6, "the fixture must actually produce more than the cap");
+    assert.equal(docs.lineSuggestions(CURSOR, { minConfidence: 0 }).length, 3);
+    assert.equal(docs.lineSuggestions(CURSOR, { minConfidence: 0, limit: 5 }).length, 5);
+  });
+
+  test("the buffer above the cursor counts, even with nothing else open", () => {
+    // In a page this matters more than anywhere else: with one document open the rest of
+    // the set is empty and the text above the cursor is the only corpus there is.
+    const docs = new DocumentSet({ lineIndex: true });
+    docs.open("only.js", PAIR);
+    docs.activate("only.js");
+    // The cursor must sit after a `loadConfig()` line for that to be the context; ending
+    // on `config.enabled` would correctly retrieve whatever followed THAT instead.
+    const buffer = PAIR + CURSOR;
+    const [best] = docs.lineSuggestions(buffer, { minConfidence: 0 });
+    assert.ok(best, "the active document is held out, but the text above the cursor is not");
+    assert.equal(best.text, "config.enabled = true;");
+  });
+
+  test("the default floor is the one the measurements used", () => {
+    const docs = setWith(PAIR, PAIR);
+    const withDefault = docs.lineSuggestions(CURSOR);
+    const explicit = docs.lineSuggestions(CURSOR, { minConfidence: DEFAULT_MIN_CONFIDENCE });
+    assert.deepEqual(withDefault, explicit);
   });
 });
