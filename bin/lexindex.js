@@ -55,8 +55,9 @@ function usage() {
     --line                        the whole NEXT LINE, retrieved from the corpus with
                                   the file and line it came from; exits 1 and says so
                                   when nothing is likely enough to offer
-    --min-confidence <n>          share of the score the best line must hold to be
-                                  offered at all, default 0.3; 0 always answers
+    --min-confidence <n>          how sure the best line must be to be offered: its
+                                  share of the score times how much evidence backs it.
+                                  Default 0.15; 0 answers always, 0.6 is "nearly sure"
     --stats                       report what the index holds
     --recital <file>              just the recital rate of <file> against the index
   index
@@ -380,7 +381,7 @@ if (lineMode) {
   const others = hit.alternatives > 1 ? `, ${hit.alternatives - 1} other(s) here` : "";
   console.error(
     `  ${hit.file}:${hit.line} \u2014 ${(hit.confidence * 100).toFixed(0)}% confident, ` +
-      `seen ${hit.count} time(s)${others}`,
+      `seen ${hit.count} of ${hit.support} time(s)${others}`,
   );
   process.exit(0);
 }

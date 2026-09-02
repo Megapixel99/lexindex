@@ -84,27 +84,63 @@ describe("LineIndex — retrieving", () => {
     assert.equal(hit.line, 3, "the retrieved line's own 1-based number in its file");
   });
 
-  test("the most agreed-on continuation wins, and confidence is reported", () => {
+  test("the most agreed-on continuation wins, and its evidence is reported", () => {
     const ix = indexOf(
       ["a.js", "const x = 1;\nsame();\n"],
       ["b.js", "const x = 1;\nsame();\n"],
       ["c.js", "const x = 1;\ndifferent();\n"],
     );
-    const hit = ix.lookup("const x = 1;");
+    const hit = ix.lookup("const x = 1;", { minConfidence: 0 });
     assert.equal(hit.text, "same();");
-    assert.equal(hit.count, 2);
+    assert.equal(hit.count, 2, "seen twice");
+    assert.equal(hit.support, 3, "out of three observations of this context");
     assert.equal(hit.alternatives, 2, "two distinct lines were seen here");
-    assert.ok(hit.confidence > 0.5, `a 2-to-1 majority should read as confident, got ${hit.confidence}`);
   });
 
-  test("confidence is a share, so it sums to one across the candidates", () => {
+  test("confidence weighs HOW MUCH evidence there is, not just which way it points", () => {
+    // The bug this exists to prevent: a context seen exactly once, with one continuation,
+    // holds 100% of the score and used to be reported at confidence 1.0 — maximum
+    // confidence from a single sighting. Measured, such a candidate is right about a
+    // fifth of the time, so it must not outrank one seen repeatedly.
+    const once = indexOf(["a.js", "const x = 1;\nlonely();\n"]);
+    const often = indexOf(
+      ...Array.from({ length: 8 }, (_, i) => [`f${i}.js`, "const x = 1;\nrepeated();\n"]),
+    );
+    const lone = once.candidates("const x = 1;")[0];
+    const many = often.candidates("const x = 1;")[0];
+
+    assert.ok(lone.confidence < 0.75, `one sighting should not read as near-certain, got ${lone.confidence}`);
+    assert.ok(
+      many.confidence > lone.confidence,
+      `eight sightings (${many.confidence}) must outrank one (${lone.confidence})`,
+    );
+    assert.ok(many.confidence > 0.85, `a unanimous, well-supported context should read high, got ${many.confidence}`);
+  });
+
+  test("confidence is no longer a share, and does not sum to one", () => {
+    // Said out loud because it used to, and a caller normalising over the list would be
+    // quietly discarding the whole evidence-weight half of the number.
     const ix = indexOf(
       ["a.js", "const x = 1;\nsame();\n"],
       ["b.js", "const x = 1;\nsame();\n"],
       ["c.js", "const x = 1;\ndifferent();\n"],
     );
     const total = ix.candidates("const x = 1;").reduce((s, c) => s + c.confidence, 0);
-    assert.ok(Math.abs(total - 1) < 1e-9, `shares summed to ${total}`);
+    assert.ok(total < 1, `evidence-weighted confidence must not sum to 1, got ${total}`);
+    for (const c of ix.candidates("const x = 1;")) {
+      assert.ok(c.reliability > 0 && c.reliability <= 1, `reliability out of range: ${c.reliability}`);
+    }
+  });
+
+  test("a floor above the old saturation point is now reachable", () => {
+    // A plain share saturated: 37.6% of its answers sat at exactly 1.0, so no floor could
+    // ask for better. Here a thin context is withheld at a bar a well-supported one clears.
+    const thin = indexOf(["a.js", "const x = 1;\nlonely();\n"]);
+    const solid = indexOf(
+      ...Array.from({ length: 8 }, (_, i) => [`f${i}.js`, "const x = 1;\nrepeated();\n"]),
+    );
+    assert.equal(thin.lookup("const x = 1;", { minConfidence: 0.8 }), null, "one sighting is not near-certainty");
+    assert.ok(solid.lookup("const x = 1;", { minConfidence: 0.8 }), "eight sightings is");
   });
 
   test("blank lines are not lines", () => {

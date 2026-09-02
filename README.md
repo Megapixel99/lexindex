@@ -547,11 +547,25 @@ lexindex: nothing here is likely enough - best of 7 candidate(s) holds 22% of th
           below --min-confidence 0.3
 ```
 
-`--min-confidence` is the dial. On the public corpus above, at the default of `0.3` it
-answers on 30.4% and 30.1% of positions across the two splits and is exact on 29.1% and
-30.2%; at `0` it answers on 37.2% and 35.8% and is exact on 23.8% and 25.6%. It prints one
-line for a human to accept, so a wrong line costs more than a missing one - but if you would
-rather see everything, `0` is there.
+`--min-confidence` is the dial, and `confidence` is two things multiplied: the share of the
+evidence pointing at this line, and how much evidence there is. The second half is
+Witten-Bell `N / (N + T)` - times seen over distinct continuations - the same formula the
+count model uses one directory over. It is there because a share alone is silent about
+sample size: a context seen exactly once, with one continuation, holds 100% of the score.
+
+| `--min-confidence` | offers | exact |
+|---|---|---|
+| `0` | 37.1% / 35.7% | 23.7% / 25.5% |
+| `0.15` (the default) | 30.4% / 30.0% | 29.0% / 30.2% |
+| `0.3` | 20.3% / 20.8% | 39.7% / 40.6% |
+| `0.6` | 4.7% / 4.7% | 62.9% / 74.9% |
+| `0.8` | 2.3% / 2.6% | 82.1% / 79.5% |
+
+Turning it up is the part that did not work before. Scored as a plain share, 37.6% of all
+answers sat at exactly 1.0, so even `--min-confidence 1` still answered on 13.9% of positions
+and could not be pushed past 42.5% exact: there was no way to ask for *only when nearly
+sure*. Now there is. The default moved from 0.3 to 0.15 because the scale changed underneath
+it and not the behaviour - those two default rows are the same answers as before.
 
 One honest caveat about what it is good at. The exact hits are largely declarative
 boilerplate - `schema: { type: 'string' },`, `in: 'query',`. A high hit rate here means
@@ -705,6 +719,39 @@ reason each of those exists at all: an ordering the editor re-sorts is an orderi
 away. The gates are the ones the CLI uses and are enforced in one place, `DocumentSet.lineSuggestions`,
 rather than copied into both adapters: only at a line start, only when the context has been
 seen, only when the best candidate clears `minConfidence`, and at most three.
+
+**What it reaches, measured.** The repository numbers above do not describe a page: there
+is no repository, only the tabs somebody has open, and the one with the cursor is held out.
+So the free variable is how many tabs, which is what `npm run measure:line:docs` sweeps.
+Library code of the same eleven express-family repositories, one tab holding the cursor and
+the rest drawn from its directory:
+
+| tabs open | offers a line | exact when it does | in the top 3 | never seen it | won by the buffer alone |
+|---|---|---|---|---|---|
+| 1 | 14.8% | 35.1% | 35.1% | 85.2% | 100% |
+| 2 | 23.0% | 35.7% | 38.2% | 75.0% | 55.8% |
+| 3 | 24.3% | 37.1% | 40.1% | 73.1% | 51.6% |
+| 5 | 30.4% | 32.5% | 35.4% | 65.4% | 37.8% |
+| 10 | 32.1% | 31.0% | 34.6% | 62.7% | 35.5% |
+| 20 | 34.5% | 32.0% | 36.2% | 58.6% | 33.5% |
+
+```sh
+npm run measure:line:docs -- --exclude '/(test|tests|examples|benchmark|support)/' ./*/
+```
+
+Read the last column first, because it is the surprise. **With one document open this
+already works**, and everything it offers comes from the text above the cursor — the index
+is empty, since the only open document is the one being edited. That is the opposite of
+what the token completer does at one document, where `DocumentSet` contributes nothing and
+the cache carries the whole result; here the buffer *is* the corpus, and a whole line is a
+thing a buffer can supply. Even at twenty tabs a third of the accepted lines still come from
+the buffer alone.
+
+Opening more tabs buys coverage rather than accuracy: 14.8% to 34.5% of positions answered,
+while exactness stays near a third throughout. And which tabs matters at small counts —
+neighbours in the same directory reach 24.3% coverage at three tabs where a random three
+reach 19.7%, converging by twenty. Nothing here is tuned to the number of tabs; it is the
+same ranking, told less.
 
 **In CodeMirror this needs Ctrl-Space.** At a line start there is by definition no prefix,
 and this source already declines to answer an unprompted popup with nothing typed — a line
